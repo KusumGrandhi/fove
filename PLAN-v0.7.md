@@ -214,6 +214,84 @@ the 32 has run in 157 sessions, so if their descriptions are loaded, that is
 context paid for and not chosen -- but "existence and working checks" for both
 agents and skills belong in one pass rather than piecemeal.
 
+
+---
+
+## 6. Editor intelligence
+
+Three requests, and they differ sharply in cost. Grounded in what is actually
+installed **[verified]**:
+
+- Monaco ships a TypeScript/JavaScript language service, and **nothing for
+  Python** — only syntax highlighting.
+- No standalone Python language server is installed (`pyright`,
+  `pyright-langserver`: absent). **Pylance is present but is licensed for use
+  in Microsoft editors only** and cannot be bundled here.
+- `ruff` **is** installed, and `rg` 15.1.0 is available.
+
+**a. Codebase search — cheap, do it first.** `rg --json` gives matches with
+line and column already parsed. A results pane with click-to-open reuses the
+`openInPane` path that already exists. No new dependency, no protocol.
+
+**b. Linting — cheap for Python, free for TS.**
+- Python: run `ruff check --output-format=json` on save and render the
+  diagnostics as Monaco markers. Ruff is fast enough to run per save and is
+  already on this machine.
+- TS/JS: Monaco's bundled service already does this; it only needs the
+  compiler options wired up so it stops complaining about module resolution.
+
+**c. Cmd-click to definition — the expensive one.** This is the item to be
+honest about:
+- For TS/JS, Monaco's own service provides it once the file is in its model
+  graph. Mostly configuration.
+- For Python it needs a real language server, and there is no ready one on this
+  machine. The options are to require `pip install pyright` (Node-based, works
+  as a plain LSP), or to build a heuristic "jump to symbol" from `rg` — which
+  is not the same thing and will be wrong on shadowed names.
+
+**Recommendation:** ship search and linting first, plus Cmd-click for TS/JS
+since that is nearly free. Treat a Python LSP client as its own block, and
+size it honestly: an LSP client is a stateful protocol with document
+synchronisation, which is the same class of work as the debugger.
+
+---
+
+## 7. Pop a pane into its own window
+
+The clearest win per hour on this list, and it needs no new protocol: a pane
+becomes a separate `BrowserWindow` on a second screen, keeping its PTY alive.
+
+The whole design constraint is **do not remount the pane**. A remount tears
+down the PTY and kills a running `claude` session, which is exactly what makes
+this feature worth having in the first place. Two workable approaches:
+
+1. **A second window rendering the same pane id.** The PTY lives in the main
+   process and is addressed by pane id, so a new window can attach to the same
+   session, replay the scrollback the service already retains, and receive the
+   same `pty:data` events. The layout tree marks the pane as "popped" and
+   leaves a placeholder behind.
+2. Native view reparenting — rejected. Fragile across platforms for no gain
+   over (1).
+
+Scope: pop out, pop back in, and remember the popped state across a restart.
+Cross-window drag is not in scope.
+
+---
+
+## 8. Worktree switcher
+
+You have 5+ worktrees across three tools. fove already reads every fact
+needed: `git worktree list`, the dirty count from `status`, and whether a
+Claude session is live in that directory from `sessionLink.ts`.
+
+A palette (⌘⇧O) listing each worktree with its branch, dirty-file count and
+agent status, opening the chosen one as a tab. The pieces exist; this is
+assembly, not new machinery.
+
+Worth pairing with a general **command palette** (§5d) rather than building a
+one-off list widget — the worktree switcher is the first useful thing to put
+in it.
+
 ---
 
 ## Order (decided)
@@ -222,9 +300,14 @@ agents and skills belong in one pass rather than piecemeal.
    copy path, reveal, context menu, and a debounced file watcher.
 2. ~~**Workspace recipes** (§4)~~ — **done**: `git worktree add` plus a recipe
    that symlinks `.env` and runs setup commands, reporting every step.
-3. **Browser pane** (§3) — self-contained, and compounds with the AI layer.
-4. **Debugger, Python only** (§2) — largest; started once the rest is stable.
-5. Pick from §5 as they prove useful.
+3. **Pop-out panes** (§7) — small, no new protocol, and immediately useful on
+   a second screen.
+4. **Codebase search + linting** (§6a, §6b) — cheap, and `rg`/`ruff` are
+   already here.
+5. **Worktree switcher** (§8) — assembly of facts fove already reads.
+6. **Browser pane** (§3) — self-contained, and compounds with the AI layer.
+7. **Debugger, Python only** (§2) — largest; started once the rest is stable.
+8. **Python LSP** (§6c) — sized like the debugger; only after it, if wanted.
 
 A checkpoint worth taking: after §1 and §2 land, use fove for a real day on
 `core` before starting the debugger. The remaining order should be confirmed by
