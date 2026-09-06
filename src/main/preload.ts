@@ -51,6 +51,10 @@ const CH = {
   fsTrash: "fs:trash",
   fsWatch: "fs:watch",
   fsChanged: "fs:changed",
+  wsRecipe: "ws:recipe",
+  wsSaveRecipe: "ws:save-recipe",
+  wsCreate: "ws:create-worktree",
+  wsApply: "ws:apply-recipe",
   claudeSnapshot: "claude:snapshot",
   claudeSessions: "claude:sessions",
   skillsList: "skills:list",
@@ -137,6 +141,14 @@ const api = {
     ipcRenderer.on(CH.fsChanged, h);
     return () => { ipcRenderer.removeListener(CH.fsChanged, h); };
   },
+
+  /** The setup recipe for a repo, or a suggestion when it has none. */
+  wsRecipe: (repoRoot: string): Promise<unknown> => ipcRenderer.invoke(CH.wsRecipe, repoRoot),
+  wsSaveRecipe: (repoRoot: string, recipe: unknown): Promise<unknown> =>
+    ipcRenderer.invoke(CH.wsSaveRecipe, repoRoot, recipe),
+  wsCreate: (opts: unknown): Promise<unknown> => ipcRenderer.invoke(CH.wsCreate, opts),
+  wsApply: (worktree: string, primary: string): Promise<unknown> =>
+    ipcRenderer.invoke(CH.wsApply, worktree, primary),
 
   claudeSnapshot: (cwd: string, paneId?: string): Promise<unknown> =>
     ipcRenderer.invoke(CH.claudeSnapshot, cwd, paneId),

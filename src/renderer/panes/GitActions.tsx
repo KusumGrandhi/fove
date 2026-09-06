@@ -49,7 +49,10 @@ export function GitActions(props: {
   onChanged: () => void;
 }) {
   const { root, onChanged } = props;
-  const [tab, setTab] = useState<"changes" | "graph" | "stash">("changes");
+  const [tab, setTab] = useState<"changes" | "graph" | "stash" | "worktree">("changes");
+  const [wtName, setWtName] = useState("");
+  const [wtSteps, setWtSteps] = useState<{ step: string; ok: boolean; detail?: string }[] | null>(null);
+  const [recipe, setRecipe] = useState<{ link?: string[]; run?: string[] } | null>(null);
   const [message, setMessage] = useState("");
   const [amend, setAmend] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -87,7 +90,39 @@ export function GitActions(props: {
   useEffect(() => {
     if (tab === "graph") void loadGraph();
     if (tab === "stash") void loadStashes();
-  }, [tab, loadGraph, loadStashes]);
+    if (tab === "worktree") {
+      void (async () => {
+        const r = (await window.th.wsRecipe(root)) as {
+          recipe: { link?: string[]; run?: string[] };
+        };
+        setRecipe(r?.recipe ?? null);
+      })();
+    }
+  }, [tab, root, loadGraph, loadStashes]);
+
+  /**
+   * Create a worktree beside the repository and apply its recipe.
+   *
+   * Placed next to the checkout rather than inside it, so the new tree is not
+   * a nested working copy of the repo it came from.
+   */
+  const createWorktree = useCallback(async () => {
+    const name = wtName.trim();
+    if (!name) return;
+    setBusy(true);
+    setWtSteps(null);
+    try {
+      const path = `${root.slice(0, root.lastIndexOf("/"))}/${root.split("/").pop()}-${name}`;
+      const r = (await window.th.wsCreate({
+        repoRoot: root, path, branch: name, newBranch: true,
+      })) as { ok: boolean; path: string; steps: { step: string; ok: boolean; detail?: string }[] };
+      setWtSteps(r.steps);
+      if (r.ok) setWtName("");
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  }, [root, wtName, onChanged]);
 
   const commit = async () => {
     if (!message.trim()) { setError("a commit needs a message"); return; }
@@ -107,6 +142,9 @@ export function GitActions(props: {
         <button style={tabStyle(tab === "graph")} onClick={() => setTab("graph")}>graph</button>
         <button style={tabStyle(tab === "stash")} onClick={() => setTab("stash")}>
           stash{stashes.length > 0 ? ` ${stashes.length}` : ""}
+        </button>
+        <button style={tabStyle(tab === "worktree")} onClick={() => setTab("worktree")}>
+          worktree
         </button>
         <div style={{ flex: 1 }} />
         <button style={S.ghost} disabled={busy}
@@ -182,6 +220,54 @@ export function GitActions(props: {
             <div style={S.empty}>no commits</div>
           ) : (
             rows.map((r) => <GraphRowView key={r.commit.hash} row={r} width={width} />)
+          )}
+        </div>
+      )}
+
+      {tab === "worktree" && (
+        <div style={S.body}>
+          <div style={S.rowBar}>
+            <input
+              style={{ ...S.message, minHeight: 0, height: 26, flex: 1 }}
+              placeholder="new branch name"
+              value={wtName}
+              onChange={(e) => setWtName(e.target.value)}
+              onKeyDown={(e) => {
+                e.stopPropagation(); // app shortcuts must not fire while typing
+                if (e.key === "Enter") void createWorktree();
+              }}
+            />
+            <button style={S.primary} disabled={busy || !wtName.trim()}
+              onClick={() => void createWorktree()}>
+              create
+            </button>
+          </div>
+
+          {recipe && (
+            <div style={S.recipe}>
+              {(recipe.link ?? []).length > 0 ? (
+                <>will symlink <b style={{ color: C.fg }}>{(recipe.link ?? []).join(", ")}</b> from this checkout</>
+              ) : (
+                <>nothing to link — no <code>.env</code> found here</>
+              )}
+              {(recipe.run ?? []).length > 0 && (
+                <> · then run <b style={{ color: C.fg }}>{(recipe.run ?? []).join(" && ")}</b></>
+              )}
+            </div>
+          )}
+
+          {wtSteps && (
+            // Every step, including the skipped ones: "already had a .env" is
+            // information, not noise.
+            <div style={S.steps}>
+              {wtSteps.map((st, i) => (
+                <div key={i} style={S.step}>
+                  <span style={{ color: st.ok ? "#3fb950" : "#f85149" }}>{st.ok ? "✓" : "✕"}</span>
+                  <span style={{ color: C.fg }}>{st.step}</span>
+                  {st.detail && <span style={{ color: C.faint }}>— {st.detail}</span>}
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}
@@ -321,6 +407,12 @@ const S: Record<string, React.CSSProperties> = {
     padding: "0 5px", borderRadius: 3, background: "#1c2333", color: "#58a6ff",
     fontSize: 10, flex: "0 0 auto",
   },
+  recipe: {
+    padding: "6px 8px", borderRadius: 5, background: "#12121a",
+    border: "1px solid #23232c", color: C.faint, fontSize: 11, lineHeight: 1.5,
+  },
+  steps: { display: "flex", flexDirection: "column", gap: 3, marginTop: 4 },
+  step: { display: "flex", gap: 6, fontSize: 11, alignItems: "baseline" },
   stashRow: {
     display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", fontSize: 11,
   },

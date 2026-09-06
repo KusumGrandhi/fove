@@ -43,6 +43,9 @@ import { IdeService } from "./ide.js";
 import { GitWriteService } from "./gitWrite.js";
 import { FileTreeService } from "./files.js";
 import { WatchService } from "./watch.js";
+import {
+  loadRecipe, saveRecipe, suggestRecipe, createWorktree, applyRecipe, type Recipe,
+} from "./workspace.js";
 import { readClaudeJson } from "../data/config/claudeJson.js";
 import { listSkills, sortSkills, budget, orphanUsage } from "../data/config/skills.js";
 import { listMemories } from "../data/config/memory.js";
@@ -244,6 +247,26 @@ ipcMain.handle(CH.fsRename, (_e, from: string, to: string) => tree.rename(from, 
 ipcMain.handle(CH.fsDuplicate, (_e, path: string) => tree.duplicate(path));
 ipcMain.handle(CH.fsTrash, (_e, path: string) => tree.trash(path));
 ipcMain.on(CH.fsWatch, (_e, dirs: string[]) => watcher.sync(dirs ?? []));
+
+// ---- workspace recipes ----------------------------------------------------
+ipcMain.handle(CH.wsRecipe, async (_e, repoRoot: string) => {
+  const saved = await loadRecipe(repoRoot);
+  // A suggestion when nothing is configured, so the feature works before setup.
+  return saved
+    ? { recipe: saved, saved: true }
+    : { recipe: await suggestRecipe(repoRoot), saved: false };
+});
+ipcMain.handle(CH.wsSaveRecipe, async (_e, repoRoot: string, recipe: Recipe) => {
+  await saveRecipe(repoRoot, recipe);
+  return { ok: true };
+});
+ipcMain.handle(CH.wsCreate, (_e, opts: Parameters<typeof createWorktree>[0]) =>
+  createWorktree(opts),
+);
+ipcMain.handle(CH.wsApply, async (_e, worktree: string, primary: string) => {
+  const recipe = (await loadRecipe(primary)) ?? (await suggestRecipe(primary));
+  return applyRecipe(worktree, primary, recipe);
+});
 
 ipcMain.handle(CH.agentsList, async (_e, cwd?: string) => {
   const { listAgents } = await import("../data/config/agents.js");

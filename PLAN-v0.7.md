@@ -218,8 +218,10 @@ agents and skills belong in one pass rather than piecemeal.
 
 ## Order (decided)
 
-1. **Editor basics** (§1) — smallest, most daily friction removed.
-2. **Workspace recipes** (§4) — small, and the evidence is already on disk.
+1. ~~**Editor basics** (§1)~~ — **done**: create, rename, duplicate, trash,
+   copy path, reveal, context menu, and a debounced file watcher.
+2. ~~**Workspace recipes** (§4)~~ — **done**: `git worktree add` plus a recipe
+   that symlinks `.env` and runs setup commands, reporting every step.
 3. **Browser pane** (§3) — self-contained, and compounds with the AI layer.
 4. **Debugger, Python only** (§2) — largest; started once the rest is stable.
 5. Pick from §5 as they prove useful.
