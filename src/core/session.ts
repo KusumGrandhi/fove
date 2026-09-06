@@ -87,9 +87,18 @@ export class LiveSession {
   private markReady!: () => void;
   private readonly prompts = new PromptQueue();
   private readonly cb: SessionCallbacks;
-  private readonly opts: { cwd: string; model?: string; resume?: string };
+  private readonly opts: {
+    cwd: string;
+    model?: string;
+    resume?: string;
+    /** Extra environment for the CLI subprocess, e.g. ANTHROPIC_BASE_URL. */
+    env?: Record<string, string>;
+  };
 
-  constructor(opts: { cwd: string; model?: string; resume?: string }, cb: SessionCallbacks = {}) {
+  constructor(
+    opts: { cwd: string; model?: string; resume?: string; env?: Record<string, string> },
+    cb: SessionCallbacks = {},
+  ) {
     this.opts = opts;
     this.cb = cb;
     this.ready = new Promise<void>((r) => {
@@ -116,6 +125,10 @@ export class LiveSession {
 
     const options: Options = {
       cwd: this.opts.cwd,
+      // Routing through the local proxy is just an env var on the subprocess.
+      env: this.opts.env
+        ? ({ ...process.env, ...this.opts.env } as Record<string, string>)
+        : undefined,
       model: this.opts.model,
       resume: this.opts.resume,
       // Token-level streaming, and subagent text/thinking -- without the latter

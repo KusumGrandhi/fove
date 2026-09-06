@@ -20,6 +20,9 @@ import { AgentTreeView } from "./panes/AgentTree.tsx";
 import { Conversation, type Turn } from "./panes/Conversation.tsx";
 import { StatusBar } from "./panes/StatusBar.tsx";
 import { ConfigBrowser, type ConfigTab } from "./panes/ConfigBrowser.tsx";
+import { Inspector } from "./panes/Inspector.tsx";
+import { InspectorProxy, ANTHROPIC } from "./proxy/server.ts";
+import { BUILTIN_PROVIDERS, isUsable, tokenFor, type Provider } from "./data/models/thirdParty.ts";
 import { readClaudeJson } from "./data/config/claudeJson.ts";
 import { listSkills, sortSkills, budget, type SkillSort } from "./data/config/skills.ts";
 import { listMemories, filterMemories } from "./data/config/memory.ts";
@@ -28,7 +31,7 @@ import { C, fit } from "./panes/theme.ts";
 import type { SessionSummary } from "./data/types.ts";
 
 type Screen = "sessions" | "inspect" | "live" | "config";
-type Pane = "chat" | "grid" | "tree" | "timeline";
+type Pane = "chat" | "grid" | "tree" | "timeline" | "wire";
 
 /**
  * OpenTUI queries the terminal directly and ignores COLUMNS/LINES, reporting a
@@ -64,6 +67,15 @@ function App() {
   const [phase, setPhase] = createSignal("idle");
   const [tick, setTick] = createSignal(0); // forces re-read of mutable session state
   const [perm, setPerm] = createSignal<PermissionRequest | undefined>();
+
+  // ---- proxy / inspector -------------------------------------------------
+  const [proxy] = createSignal(new InspectorProxy());
+  const [wireOn, setWireOn] = createSignal(false);
+  const [wireCursor, setWireCursor] = createSignal(0);
+  const [wireDetail, setWireDetail] = createSignal(false);
+  const [provider, setProvider] = createSignal<Provider>(BUILTIN_PROVIDERS[0]!);
+  const [captureTick, setCaptureTick] = createSignal(0);
+  const captures = () => { captureTick(); return proxy().captures.list(); };
 
   // ---- config browser ----------------------------------------------------
   const [configTab, setConfigTab] = createSignal<ConfigTab>("skills");
@@ -115,8 +127,17 @@ function App() {
   };
 
   function startLive() {
+    // When the inspector is armed we route the session through the local proxy,
+    // which is also what makes provider switching seamless later.
+    let env: Record<string, string> | undefined;
+    if (wireOn()) {
+      const p = proxy();
+      p.onCapture = () => setCaptureTick((t) => t + 1);
+      const base = p.start();
+      env = { ANTHROPIC_BASE_URL: base };
+    }
     const s = new LiveSession(
-      { cwd: process.cwd() },
+      { cwd: process.cwd(), env },
       {
         onPhase: (p) => { setPhase(p); setTick((t) => t + 1); },
         onPermission: (r) => setPerm(r),
@@ -183,6 +204,7 @@ function App() {
       if (k === "q") process.exit(0);
       if (k === "n") { startLive(); return; }
       if (k === "c") { setScreen("config"); setConfigCursor(0); return; }
+      if (k === "w") { setWireOn((v) => !v); return; }
       if (k === "return") {
         const s = list[cursor()];
         if (s) { setOpened(s); setAgentCursor(0); setScreen("inspect"); setPane("tree"); }
@@ -223,7 +245,13 @@ function App() {
 
     if (screen() === "live") {
       if (ctrl && k === "t") {
-        setPane((v) => (v === "chat" ? "grid" : v === "grid" ? "tree" : v === "tree" ? "timeline" : "chat"));
+        setPane((v) =>
+          v === "chat" ? "grid"
+          : v === "grid" ? "tree"
+          : v === "tree" ? "timeline"
+          : wireOn() ? "wire"
+          : "chat",
+        );
         return;
       }
       if (k === "escape") { void live()?.interrupt(); return; }
@@ -232,6 +260,26 @@ function App() {
         if (k === "backspace") { setDraft((d) => d.slice(0, -1)); return; }
         if (key.sequence && key.sequence.length === 1 && !ctrl) {
           setDraft((d) => d + key.sequence);
+        }
+        return;
+      }
+      if (pane() === "wire") {
+        const n = captures().length;
+        if (k === "down" || k === "j") setWireCursor((c) => Math.min(n - 1, c + 1));
+        if (k === "up" || k === "k") setWireCursor((c) => Math.max(0, c - 1));
+        if (k === "return") setWireDetail((d) => !d);
+        if (k === "p") {
+          // Cycle provider. The proxy reroutes on the next request, so the
+          // conversation, agent tree and cost history all stay put.
+          const usable = BUILTIN_PROVIDERS.filter(isUsable);
+          const idx = usable.findIndex((x) => x.id === provider().id);
+          const next = usable[(idx + 1) % usable.length]!;
+          setProvider(next);
+          proxy().setUpstream(
+            next.thirdParty
+              ? { baseUrl: next.baseUrl, authToken: tokenFor(next), thirdParty: true, label: next.label }
+              : ANTHROPIC,
+          );
         }
         return;
       }
@@ -286,7 +334,7 @@ function App() {
       <Show when={screen() === "sessions"}>
         <box style={{ flexDirection: "column", width: "100%" }}>
           <text
-            content={fit(`  ${(sessions() ?? []).length} sessions  ·  ↑↓ move · ⏎ inspect · n live · c config · q quit  [${cursor() + 1}/${(sessions() ?? []).length || 1}]`, dims().width)}
+            content={fit(`  ${(sessions() ?? []).length} sessions  ·  ⏎ inspect · n live · c config · w wire${wireOn() ? " ON" : ""} · q quit  [${cursor() + 1}/${(sessions() ?? []).length || 1}]`, dims().width)}
             style={{ fg: C.dim }}
           />
           <Show when={sessions()} fallback={<text content="  scanning…" style={{ fg: C.dim }} />}>
@@ -312,7 +360,9 @@ function App() {
           <text
             content={fit(
               `  ${pane().toUpperCase()}  ·  ^t pane · ${
-                pane() === "chat" ? "⏎ send" : "↑↓ select · x stop"
+                pane() === "chat" ? "⏎ send"
+                : pane() === "wire" ? "↑↓ select · ⏎ detail · p provider"
+                : "↑↓ select · x stop"
               } · esc stop · ^c quit`,
               dims().width,
             )}
@@ -327,6 +377,15 @@ function App() {
           </Show>
           <Show when={pane() === "grid"}>
             <AgentGrid agents={agents()} selectedId={selected()?.id} height={bodyRows()} />
+          </Show>
+          <Show when={pane() === "wire"}>
+            <Inspector
+              captures={captures()}
+              cursor={wireCursor()}
+              detail={wireDetail()}
+              upstream={provider().label}
+              thirdParty={provider().thirdParty}
+            />
           </Show>
           <Show when={pane() === "tree"}>
             <AgentTreeView agents={agents()} selectedId={selected()?.id} />

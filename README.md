@@ -15,7 +15,7 @@ Under construction. See the plan for milestones.
 - **M2** live single session — SDK streaming, permissions, model info ✅
 - **M3** live subagent visualization — tiled AgentGrid ✅ *(the centerpiece)*
 - **M4** config browser — skills by cost-per-use, memory, MCP ✅
-- **M5** proxy: API inspector + model switching
+- **M5** proxy: raw API inspector + provider switching ✅
 
 ## Run
 
@@ -50,6 +50,12 @@ therefore clipped explicitly with `fit()`, and row boxes carry
 `render()` dies inside `createRoot`: solid-js's export map lists `node` (the SSR
 stub) ahead of the client build, and neither a `conditions` entry nor
 `--conditions=solid` overrides it.
+
+**No SDK method exposes the raw wire request.** The only faithful way to show
+it is a local reverse proxy on `ANTHROPIC_BASE_URL`. That same proxy is what
+makes provider switching seamless: swapping upstream is a routing change inside
+it, so the client keeps its connection and the conversation view never resets.
+Responses are tee'd rather than buffered, or streaming would break.
 
 **OpenTUI does not clear rows a shorter render leaves behind.** A tile whose
 content shrinks keeps stale text from the previous frame, so tiles are padded to
