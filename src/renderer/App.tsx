@@ -315,6 +315,39 @@ export function App() {
     localStorage.setItem("fove.theme", themeId);
   }, [themeId]);
 
+  /** Panes currently living in their own window. */
+  const [popped, setPopped] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    void (async () => setPopped(new Set((await window.th.popoutList()) as string[])))();
+    // A window the user closes puts its pane back rather than leaving a hole.
+    const off = window.th.onPopoutClosed((paneId) => {
+      setPopped((prev) => {
+        if (!prev.has(paneId)) return prev;
+        const next = new Set(prev);
+        next.delete(paneId);
+        return next;
+      });
+    });
+    return off;
+  }, []);
+
+  const togglePopout = useCallback(
+    (paneId: string, title: string) => {
+      setPopped((prev) => {
+        const next = new Set(prev);
+        if (next.has(paneId)) {
+          next.delete(paneId);
+          window.th.popoutClose(paneId);
+        } else {
+          next.add(paneId);
+          window.th.popoutOpen(paneId, title);
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
   const [pickerOpen, setPickerOpen] = useState(false);
   const [diffs, setDiffs] = useState<DiffRequest[]>([]);
   useEffect(() => {
@@ -577,6 +610,18 @@ export function App() {
                     </span>
                     <div style={S.grow} />
                     <button
+                      style={{ ...S.paneClose, color: popped.has(paneId) ? C.accent : undefined }}
+                      title={popped.has(paneId)
+                        ? "Bring this pane back into the window"
+                        : "Open this pane in its own window"}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        togglePopout(paneId, spec.title || spec.kind);
+                      }}
+                    >
+                      {popped.has(paneId) ? "⇱" : "⇲"}
+                    </button>
+                    <button
                       style={{ ...S.paneClose, color: isPin ? C.accent : undefined }}
                       title={isPin ? "Unpin this pane" : "Pin this pane in place"}
                       onClick={(e) => {
@@ -601,7 +646,20 @@ export function App() {
                     </button>
                   </div>
                   <div style={S.paneBody}>
-                    {spec.kind === "git" ? (
+                    {popped.has(paneId) ? (
+                      // The pane lives in another window. Rendering it here too
+                      // would attach a second terminal to the same PTY, which
+                      // echoes twice and reads as a bug.
+                      <div style={S.poppedOut}>
+                        <div>this pane is open in its own window</div>
+                        <button
+                          style={S.poppedBtn}
+                          onClick={() => togglePopout(paneId, spec.title || spec.kind)}
+                        >
+                          bring it back
+                        </button>
+                      </div>
+                    ) : spec.kind === "git" ? (
                       <GitStatusPane cwd={spec.cwd ?? cwdOf(active)} onOpen={openInPane} />
                     ) : spec.kind === "editor" ? (
                       <EditorPane
@@ -726,6 +784,15 @@ const S: Record<string, React.CSSProperties> = {
     fontSize: 11, color: C.faint,
   },
   paneHeaderActive: { background: "#1a2333", borderBottom: `1px solid ${C.accent}` },
+  poppedOut: {
+    display: "flex", flexDirection: "column", alignItems: "center",
+    justifyContent: "center", gap: 10, height: "100%",
+    color: C.faint, fontSize: 11, fontFamily: "system-ui",
+  },
+  poppedBtn: {
+    padding: "3px 12px", borderRadius: 4, border: `1px solid ${C.line}`,
+    background: "transparent", color: C.fg, fontSize: 11, cursor: "pointer",
+  },
   paneClose: {
     background: "transparent", border: "none", color: C.faint,
     cursor: "pointer", fontSize: 11, padding: "0 3px", lineHeight: 1,

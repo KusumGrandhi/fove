@@ -43,6 +43,7 @@ import { IdeService } from "./ide.js";
 import { GitWriteService } from "./gitWrite.js";
 import { FileTreeService } from "./files.js";
 import { WatchService } from "./watch.js";
+import { PopoutService } from "./popout.js";
 import {
   loadRecipe, saveRecipe, suggestRecipe, createWorktree, applyRecipe, type Recipe,
 } from "./workspace.js";
@@ -57,8 +58,18 @@ import { CH, type SpawnRequest } from "../shared/ipc.js";
 
 let win: BrowserWindow | null = null;
 
+/**
+ * Broadcast to every window.
+ *
+ * A popped-out pane is a second BrowserWindow attached to the *same* PTY, so
+ * sending only to the main window would leave it showing a dead terminal.
+ * Every channel here is addressed by pane id, and a window ignores ids it does
+ * not render, so a broadcast is correct rather than merely convenient.
+ */
 const send = (channel: string, ...args: unknown[]): void => {
-  if (win && !win.isDestroyed()) win.webContents.send(channel, ...args);
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send(channel, ...args);
+  }
 };
 
 const ptys = new PtyService(
@@ -116,6 +127,7 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   ptys.killAll();
   watcher.closeAll();
+  popouts.closeAll();
   // Remove the lock file, so Claude is never offered a dead IDE.
   void ide.stop();
 });
@@ -249,6 +261,15 @@ ipcMain.handle(CH.fsTrash, (_e, path: string) => tree.trash(path));
 ipcMain.on(CH.fsWatch, (_e, dirs: string[]) => watcher.sync(dirs ?? []));
 
 // ---- workspace recipes ----------------------------------------------------
+// ---- popped-out panes -----------------------------------------------------
+const popouts = new PopoutService((paneId) => send(CH.popoutClosed, paneId));
+
+ipcMain.on(CH.popoutOpen, (_e, paneId: string, title: string) =>
+  popouts.open(paneId, title),
+);
+ipcMain.on(CH.popoutClose, (_e, paneId: string) => popouts.close(paneId));
+ipcMain.handle(CH.popoutList, () => popouts.list());
+
 ipcMain.handle(CH.wsRecipe, async (_e, repoRoot: string) => {
   const saved = await loadRecipe(repoRoot);
   // A suggestion when nothing is configured, so the feature works before setup.

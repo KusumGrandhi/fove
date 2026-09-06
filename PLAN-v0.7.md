@@ -249,10 +249,11 @@ honest about:
   as a plain LSP), or to build a heuristic "jump to symbol" from `rg` — which
   is not the same thing and will be wrong on shadowed names.
 
-**Recommendation:** ship search and linting first, plus Cmd-click for TS/JS
-since that is nearly free. Treat a Python LSP client as its own block, and
-size it honestly: an LSP client is a stateful protocol with document
-synchronisation, which is the same class of work as the debugger.
+**Decided:** search, Python linting and TS/JS Cmd-click all ship in v0.7 —
+none of them needs a language server. **Python go-to-definition comes after
+the debugger**, deliberately: an LSP client is a stateful protocol with
+document synchronisation, the same class of work as DAP, so the debugger
+should teach that shape first.
 
 ---
 
@@ -300,14 +301,15 @@ in it.
    copy path, reveal, context menu, and a debounced file watcher.
 2. ~~**Workspace recipes** (§4)~~ — **done**: `git worktree add` plus a recipe
    that symlinks `.env` and runs setup commands, reporting every step.
-3. **Pop-out panes** (§7) — small, no new protocol, and immediately useful on
-   a second screen.
+3. ~~**Pop-out panes** (§7)~~ — **done**: a pane opens in its own window and
+   attaches to the running PTY, verified by scrollback written before the pop.
 4. **Codebase search + linting** (§6a, §6b) — cheap, and `rg`/`ruff` are
    already here.
 5. **Worktree switcher** (§8) — assembly of facts fove already reads.
 6. **Browser pane** (§3) — self-contained, and compounds with the AI layer.
 7. **Debugger, Python only** (§2) — largest; started once the rest is stable.
-8. **Python LSP** (§6c) — sized like the debugger; only after it, if wanted.
+8. **Python LSP** (§6c) — after the debugger, which teaches the same
+   stateful-protocol shape.
 
 A checkpoint worth taking: after §1 and §2 land, use fove for a real day on
 `core` before starting the debugger. The remaining order should be confirmed by

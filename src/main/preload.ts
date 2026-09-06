@@ -55,6 +55,10 @@ const CH = {
   wsSaveRecipe: "ws:save-recipe",
   wsCreate: "ws:create-worktree",
   wsApply: "ws:apply-recipe",
+  popoutOpen: "popout:open",
+  popoutClose: "popout:close",
+  popoutList: "popout:list",
+  popoutClosed: "popout:closed",
   claudeSnapshot: "claude:snapshot",
   claudeSessions: "claude:sessions",
   skillsList: "skills:list",
@@ -149,6 +153,21 @@ const api = {
   wsCreate: (opts: unknown): Promise<unknown> => ipcRenderer.invoke(CH.wsCreate, opts),
   wsApply: (worktree: string, primary: string): Promise<unknown> =>
     ipcRenderer.invoke(CH.wsApply, worktree, primary),
+
+  /** Move a pane into its own window; the PTY is not restarted. */
+  popoutOpen: (paneId: string, title: string): void =>
+    ipcRenderer.send(CH.popoutOpen, paneId, title),
+  popoutClose: (paneId: string): void => ipcRenderer.send(CH.popoutClose, paneId),
+  popoutList: (): Promise<string[]> => ipcRenderer.invoke(CH.popoutList),
+  /** Fires when the user closes a popped window, so the pane can come home. */
+  onPopoutClosed: (fn: (paneId: string) => void): (() => void) => {
+    const h = (_e: unknown, paneId: string): void => fn(paneId);
+    ipcRenderer.on(CH.popoutClosed, h);
+    return () => { ipcRenderer.removeListener(CH.popoutClosed, h); };
+  },
+  /** The pane this window is dedicated to, when it is a popped-out one. */
+  popoutPaneId: (): string | null =>
+    new URLSearchParams(window.location.search).get("popout"),
 
   claudeSnapshot: (cwd: string, paneId?: string): Promise<unknown> =>
     ipcRenderer.invoke(CH.claudeSnapshot, cwd, paneId),
