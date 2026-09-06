@@ -88,24 +88,75 @@ export async function saveRecipe(repoRoot: string, recipe: Recipe): Promise<void
  * `git ls-files` answers this directly. `check-ignore` does not: `core/.env`
  * is both tracked *and* matched by a gitignore rule, so an ignore-based test
  * gets it wrong in the one case that matters.
+ *
+ * Installed dependencies are proposed too, for a different reason. They are
+ * not secrets — they are *expensive*: `core/aiprise-frontend/node_modules` is
+ * 2.3GB, and reinstalling it per worktree costs minutes and disk for a byte-
+ * identical result. A working worktree here links it, which is why a new one
+ * is usable immediately.
  */
 export async function suggestRecipe(repoRoot: string): Promise<Recipe> {
-  const found = await findEnvFiles(repoRoot);
-  if (found.length === 0) return { link: [] };
+  const [envFiles, deps] = await Promise.all([
+    findEnvFiles(repoRoot),
+    findDepDirs(repoRoot),
+  ]);
+  if (envFiles.length === 0) return { link: deps.sort() };
 
   // One batched call listing which of these git tracks; the rest are ours.
   try {
-    const { stdout } = await run("git", ["ls-files", "-z", "--", ...found], {
+    const { stdout } = await run("git", ["ls-files", "-z", "--", ...envFiles], {
       cwd: repoRoot,
       timeout: 30_000,
     });
     const tracked = new Set(stdout.split("\u0000").filter(Boolean));
-    return { link: found.filter((f) => !tracked.has(f)).sort() };
+    return { link: [...envFiles.filter((f) => !tracked.has(f)), ...deps].sort() };
   } catch {
     // Not a git repository, or git unavailable: offer everything found and let
     // the user prune it rather than silently offering nothing.
-    return { link: found.sort() };
+    return { link: [...envFiles, ...deps].sort() };
   }
+}
+
+/** Dependency directories worth sharing rather than reinstalling. */
+const DEP_DIRS = ["node_modules", ".venv", "venv", "vendor/bundle", ".yarn/cache"];
+
+/**
+ * Installed dependency directories, as repo-relative paths.
+ *
+ * Only real directories are proposed: one that is already a symlink belongs to
+ * some other arrangement and should be left alone.
+ */
+async function findDepDirs(root: string, maxDepth = 2): Promise<string[]> {
+  const out: string[] = [];
+
+  const check = async (rel: string): Promise<void> => {
+    try {
+      const st = await lstat(join(root, rel));
+      // A symlink here is somebody else's setup; a real directory is ours.
+      if (st.isDirectory() && !st.isSymbolicLink()) out.push(rel);
+    } catch {
+      // Not installed here.
+    }
+  };
+
+  const walk = async (dir: string, rel: string, depth: number): Promise<void> => {
+    for (const name of DEP_DIRS) await check(rel ? `${rel}/${name}` : name);
+    if (depth >= maxDepth) return;
+    let entries: Dirent[];
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (SKIP_DIRS.has(entry.name) || DEP_DIRS.includes(entry.name)) continue;
+      await walk(join(dir, entry.name), rel ? `${rel}/${entry.name}` : entry.name, depth + 1);
+    }
+  };
+
+  await walk(root, "", 0);
+  return out;
 }
 
 /** Directories never worth walking for env files. */

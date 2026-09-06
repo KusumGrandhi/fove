@@ -243,18 +243,36 @@ export function GitActions(props: {
             </button>
           </div>
 
-          {recipe && (
-            <div style={S.recipe}>
-              {(recipe.link ?? []).length > 0 ? (
-                <>will symlink <b style={{ color: C.fg }}>{(recipe.link ?? []).join(", ")}</b> from this checkout</>
-              ) : (
-                <>nothing to link — no <code>.env</code> found here</>
-              )}
-              {(recipe.run ?? []).length > 0 && (
-                <> · then run <b style={{ color: C.fg }}>{(recipe.run ?? []).join(" && ")}</b></>
-              )}
-            </div>
-          )}
+          {recipe && (() => {
+            // Config and dependencies are linked for different reasons -- one
+            // holds values only this checkout has, the other is expensive to
+            // reinstall -- so they are worth naming separately.
+            const links = recipe.link ?? [];
+            const deps = links.filter((p) => /(^|\/)(node_modules|\.?venv|vendor\/bundle|\.yarn\/cache)$/.test(p));
+            const config = links.filter((p) => !deps.includes(p));
+            return (
+              <div style={S.recipe}>
+                {links.length === 0 ? (
+                  <>nothing to link — no untracked config or installed dependencies found</>
+                ) : (
+                  <>
+                    {config.length > 0 && (
+                      <div>config: <b style={{ color: C.fg }}>{config.join(", ")}</b></div>
+                    )}
+                    {deps.length > 0 && (
+                      <div>
+                        dependencies: <b style={{ color: C.fg }}>{deps.join(", ")}</b>
+                        <span style={{ color: C.faint }}> · shared, not reinstalled</span>
+                      </div>
+                    )}
+                  </>
+                )}
+                {(recipe.run ?? []).length > 0 && (
+                  <div>then run <b style={{ color: C.fg }}>{(recipe.run ?? []).join(" && ")}</b></div>
+                )}
+              </div>
+            );
+          })()}
 
           {wtSteps && (
             // Every step, including the skipped ones: "already had a .env" is

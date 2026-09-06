@@ -4,7 +4,7 @@
  * These create worktrees and symlinks; never point them at a real checkout.
  */
 import { describe, expect, test, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile, readFile, lstat, readlink, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, lstat, readlink, mkdir, symlink } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
@@ -74,11 +74,47 @@ describe("suggestRecipe", () => {
     expect(r.link!.some((p) => p.startsWith(".conductor/"))).toBe(false);
   });
 
-  test("ignores dependency directories", async () => {
+  test("does not look for env files inside dependency directories", async () => {
     await mkdir(join(repo, "node_modules", "pkg"), { recursive: true });
     await writeFile(join(repo, "node_modules", "pkg", ".env"), "X=1\n");
     const r = await suggestRecipe(repo);
-    expect(r.link!.some((p) => p.includes("node_modules"))).toBe(false);
+    expect(r.link).not.toContain("node_modules/pkg/.env");
+  });
+});
+
+describe("dependency directories", () => {
+  test("offers node_modules -- reinstalling 2.3GB per worktree is the cost this avoids", async () => {
+    await mkdir(join(repo, "frontend", "node_modules", "react"), { recursive: true });
+    const r = await suggestRecipe(repo);
+    expect(r.link).toContain("frontend/node_modules");
+  });
+
+  test("offers a virtualenv at the root", async () => {
+    await mkdir(join(repo, ".venv", "bin"), { recursive: true });
+    const r = await suggestRecipe(repo);
+    expect(r.link).toContain(".venv");
+  });
+
+  test("leaves an existing symlink alone -- that is someone else's arrangement", async () => {
+    const real = join(scratch, "shared_modules");
+    await mkdir(real, { recursive: true });
+    await symlink(real, join(repo, "node_modules"));
+    const r = await suggestRecipe(repo);
+    expect(r.link).not.toContain("node_modules");
+  });
+
+  test("links a dependency directory into a worktree", async () => {
+    await mkdir(join(repo, "node_modules", "pkg"), { recursive: true });
+    await writeFile(join(repo, "node_modules", "pkg", "index.js"), "module.exports=1\n");
+
+    const wt = join(scratch, "dep-wt");
+    await mkdir(wt);
+    const res = await applyRecipe(wt, repo, { link: ["node_modules"] });
+    expect(res.ok).toBe(true);
+    expect((await lstat(join(wt, "node_modules"))).isSymbolicLink()).toBe(true);
+    // Resolvable through the link, which is the whole point.
+    expect(await readFile(join(wt, "node_modules", "pkg", "index.js"), "utf8"))
+      .toContain("module.exports");
   });
 });
 
