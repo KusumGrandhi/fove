@@ -12,6 +12,8 @@ import { join } from "node:path";
 import net from "node:net";
 import crypto from "node:crypto";
 
+const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 let dir: string;
 let ide: import("../src/main/ide.js").IdeService;
 let port: number;
@@ -306,6 +308,30 @@ describe("JSON-RPC", () => {
     const c = await client(token);
     const r = await c.call("no/such/method", {}, 6) as { error: { code: number } };
     expect(r.error.code).toBe(-32601);
+    c.close();
+  });
+
+  test("getCurrentSelection reports what the editor last sent", async () => {
+    const c = await client(token);
+    const r = await c.call("tools/call", { name: "getCurrentSelection", arguments: {} }, 30) as
+      { result: { content: { text: string }[] } };
+    const sel = JSON.parse(r.result.content[0]!.text) as Record<string, unknown>;
+    expect(sel.filePath).toBe("/w/a.ts");
+    // 0-based, matching VS Code's own selection_changed payloads.
+    expect((sel.selection as Record<string, unknown>).start).toEqual({ line: 1, character: 0 });
+    c.close();
+  });
+
+  test("getLatestSelection survives after the notification, so Claude can ask later", async () => {
+    const c = await client(token);
+    ide.notifySelection({
+      filePath: "/w/later.ts", text: "z",
+      selection: { start: { line: 7, character: 2 }, end: { line: 7, character: 3 }, isEmpty: false },
+    });
+    await sleepMs(100);
+    const r = await c.call("tools/call", { name: "getLatestSelection", arguments: {} }, 31) as
+      { result: { content: { text: string }[] } };
+    expect(JSON.parse(r.result.content[0]!.text).filePath).toBe("/w/later.ts");
     c.close();
   });
 

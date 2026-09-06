@@ -150,6 +150,15 @@ export function ensureTheme(): void {
   themeReady = true;
 }
 
+/** The path a model was opened under, since Monaco models carry no path of ours. */
+function pathOfModel(
+  models: Map<string, monaco.editor.ITextModel>,
+  model: monaco.editor.ITextModel,
+): string | null {
+  for (const [path, m] of models) if (m === model) return path;
+  return null;
+}
+
 export function EditorPane(props: { cwd: string; initialPath?: string }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -261,7 +270,43 @@ export function EditorPane(props: { cwd: string; initialPath?: string }) {
       padding: { top: 8 },
     });
     editorRef.current = ed;
+
+    /**
+     * Report the selection to Claude Code.
+     *
+     * This is what makes "look at the highlighted code" work: without it
+     * getCurrentSelection returns nothing and Claude has no idea what the user
+     * is pointing at. Monaco fires on every cursor move, so the send is
+     * debounced -- each one is a WebSocket notification to a live agent.
+     */
+    let selTimer: ReturnType<typeof setTimeout> | undefined;
+    const reportSelection = () => {
+      clearTimeout(selTimer);
+      selTimer = setTimeout(() => {
+        const model = ed.getModel();
+        const sel = ed.getSelection();
+        const path = model ? pathOfModel(modelsRef.current, model) : null;
+        if (!model || !sel || !path) return;
+        window.th.ideSelection({
+          filePath: path,
+          text: model.getValueInRange(sel),
+          selection: {
+            // Monaco counts lines from 1; the protocol counts from 0.
+            start: { line: sel.startLineNumber - 1, character: sel.startColumn - 1 },
+            end: { line: sel.endLineNumber - 1, character: sel.endColumn - 1 },
+            isEmpty: sel.isEmpty(),
+          },
+        });
+      }, 150);
+    };
+    const subs = [
+      ed.onDidChangeCursorSelection(reportSelection),
+      ed.onDidFocusEditorText(reportSelection),
+    ];
+
     return () => {
+      clearTimeout(selTimer);
+      for (const sub of subs) sub.dispose();
       ed.dispose();
       for (const m of modelsRef.current.values()) m.dispose();
       modelsRef.current.clear();
