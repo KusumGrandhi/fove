@@ -17,6 +17,7 @@ import cssWorker from "../../../node_modules/monaco-editor/esm/vs/language/css/c
 import htmlWorker from "../../../node_modules/monaco-editor/esm/vs/language/html/html.worker.js?worker";
 import tsWorker from "../../../node_modules/monaco-editor/esm/vs/language/typescript/ts.worker.js?worker";
 import { C } from "../ui/Chrome.js";
+import { ContextMenu, type MenuItem } from "../ui/ContextMenu.js";
 
 interface OpenFile {
   path: string;
@@ -178,6 +179,15 @@ export function EditorPane(props: {
   const [activePath, setActivePath] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [treeOpen, setTreeOpen] = useState(true);
+  /** Right-click menu position and the entry it was opened on. */
+  const [menu, setMenu] = useState<{ x: number; y: number; path: string; dir: boolean } | null>(null);
+  /** An inline text box in the tree: renaming an entry, or naming a new one. */
+  const [editing, setEditing] = useState<
+    { mode: "rename"; path: string; value: string }
+    | { mode: "new-file" | "new-folder"; value: string }
+    | null
+  >(null);
+  const [treeError, setTreeError] = useState<string | null>(null);
 
   const active = files.find((f) => f.path === activePath) ?? null;
 
@@ -272,6 +282,101 @@ export function EditorPane(props: {
       return rest;
     });
   }, [activePath]);
+
+  // ---- tree actions -------------------------------------------------------
+
+  /** Report a failed operation beside the tree rather than swallowing it. */
+  const runFs = useCallback(async (fn: () => Promise<unknown>) => {
+    const r = (await fn()) as { ok: boolean; error?: string; path?: string };
+    if (!r?.ok) setTreeError(r?.error ?? "operation failed");
+    else setTreeError(null);
+    await listDir(dir);
+    return r;
+  }, [dir, listDir]);
+
+  /**
+   * Rename, moving any open editor tab with the file.
+   *
+   * Monaco keys models by path, so without re-keying the map the editor keeps
+   * writing to a path that no longer exists -- the save silently recreates the
+   * old file.
+   */
+  const renameEntry = useCallback(async (from: string, name: string) => {
+    const to = `${from.slice(0, from.lastIndexOf("/"))}/${name}`;
+    const r = await runFs(() => window.th.fsRename(from, to));
+    if (!r.ok) return;
+
+    const model = modelsRef.current.get(from);
+    if (model) {
+      modelsRef.current.delete(from);
+      modelsRef.current.set(to, model);
+    }
+    setFiles((prev) => prev.map((f) => (f.path === from ? { ...f, path: to, name } : f)));
+    setActivePath((p) => (p === from ? to : p));
+  }, [runFs]);
+
+  /** Delete to the system trash, after confirming -- the tab goes too. */
+  const trashEntry = useCallback(async (path: string) => {
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    if (!confirm(`Move "${name}" to the Trash?`)) return;
+    const r = await runFs(() => window.th.fsTrash(path));
+    if (r.ok) closeFile(path);
+  }, [runFs, closeFile]);
+
+  const copyText = useCallback((text: string) => {
+    void navigator.clipboard?.writeText(text);
+  }, []);
+
+  /** Build the menu for a tree entry. */
+  const menuItems = useCallback((path: string, isDir: boolean): MenuItem[] => {
+    const rel = path.startsWith(props.cwd) ? path.slice(props.cwd.length + 1) : path;
+    return [
+      { label: "New file…", onSelect: () => setEditing({ mode: "new-file", value: "" }) },
+      { label: "New folder…", onSelect: () => setEditing({ mode: "new-folder", value: "" }) },
+      {
+        label: "Rename…",
+        separated: true,
+        onSelect: () =>
+          setEditing({ mode: "rename", path, value: path.slice(path.lastIndexOf("/") + 1) }),
+      },
+      {
+        label: "Duplicate",
+        disabled: isDir,
+        onSelect: () => void runFs(() => window.th.fsDuplicate(path)),
+      },
+      { label: "Copy path", separated: true, onSelect: () => copyText(path) },
+      { label: "Copy relative path", onSelect: () => copyText(rel) },
+      { label: "Reveal in Finder", onSelect: () => window.th.revealInFinder(path) },
+      { label: "Open in VS Code", onSelect: () => window.th.openInEditor(path) },
+      {
+        label: "Move to Trash",
+        separated: true,
+        danger: true,
+        onSelect: () => void trashEntry(path),
+      },
+    ];
+  }, [props.cwd, runFs, copyText, trashEntry]);
+
+  /** Commit whatever the inline box is for. */
+  const commitEditing = useCallback(async () => {
+    if (!editing) return;
+    const name = editing.value.trim();
+    setEditing(null);
+    if (!name) return;
+    if (editing.mode === "rename") await renameEntry(editing.path, name);
+    else if (editing.mode === "new-file") await runFs(() => window.th.fsCreateFile(`${dir}/${name}`));
+    else await runFs(() => window.th.fsCreateDir(`${dir}/${name}`));
+  }, [editing, renameEntry, runFs, dir]);
+
+  // Keep the tree live: an agent changing a file is the normal case here, and
+  // a stale list also makes the editor's mtime guard reject the next save.
+  useEffect(() => {
+    window.th.fsWatch([dir]);
+    const off = window.th.onFsChanged((changed) => {
+      if (changed === dir) void listDir(dir);
+    });
+    return off;
+  }, [dir, listDir]);
 
   // ---- monaco lifecycle ---------------------------------------------------
   useEffect(() => {
@@ -408,26 +513,78 @@ export function EditorPane(props: {
 
       <div style={S.body}>
         {treeOpen && (
-          <div style={S.tree}>
+          <div
+            style={S.tree}
+            onContextMenu={(ev) => {
+              // Empty space acts on the directory being shown.
+              if (ev.target !== ev.currentTarget) return;
+              ev.preventDefault();
+              setMenu({ x: ev.clientX, y: ev.clientY, path: dir, dir: true });
+            }}
+          >
             <div style={S.treePath} title={dir}>
               <button style={S.upBtn} onClick={() => void listDir(parent)} title="Parent folder">↑</button>
               <span style={S.ellipsis}>{dir.split("/").pop() || "/"}</span>
             </div>
-            {entries.map((e) => (
-              <div
-                key={e.path}
-                onClick={() => (e.dir ? void listDir(e.path) : void openFile(e.path))}
-                style={{
-                  ...S.treeRow,
-                  color: e.path === activePath ? C.fg : e.dir ? C.dim : C.faint,
-                  background: e.path === activePath ? "#1e2636" : undefined,
-                }}
-                title={e.path}
-              >
-                <span style={{ width: 13 }}>{e.dir ? "▸" : "·"}</span>
-                <span style={S.ellipsis}>{e.name}</span>
+            {/* Naming a new file or folder happens in place, at the top. */}
+            {editing && editing.mode !== "rename" && (
+              <div style={S.treeRow}>
+                <span style={{ width: 13 }}>{editing.mode === "new-folder" ? "▸" : "·"}</span>
+                <input
+                  autoFocus
+                  style={S.inlineInput}
+                  value={editing.value}
+                  placeholder={editing.mode === "new-folder" ? "folder name" : "file name"}
+                  onChange={(ev) => setEditing({ ...editing, value: ev.target.value })}
+                  onBlur={() => void commitEditing()}
+                  onKeyDown={(ev) => {
+                    ev.stopPropagation(); // the app's shortcuts must not fire here
+                    if (ev.key === "Enter") void commitEditing();
+                    if (ev.key === "Escape") setEditing(null);
+                  }}
+                />
               </div>
-            ))}
+            )}
+
+            {entries.map((e) =>
+              editing?.mode === "rename" && editing.path === e.path ? (
+                <div key={e.path} style={S.treeRow}>
+                  <span style={{ width: 13 }}>{e.dir ? "▸" : "·"}</span>
+                  <input
+                    autoFocus
+                    style={S.inlineInput}
+                    value={editing.value}
+                    onChange={(ev) => setEditing({ ...editing, value: ev.target.value })}
+                    onBlur={() => void commitEditing()}
+                    onKeyDown={(ev) => {
+                      ev.stopPropagation();
+                      if (ev.key === "Enter") void commitEditing();
+                      if (ev.key === "Escape") setEditing(null);
+                    }}
+                  />
+                </div>
+              ) : (
+                <div
+                  key={e.path}
+                  onClick={() => (e.dir ? void listDir(e.path) : void openFile(e.path))}
+                  onContextMenu={(ev) => {
+                    ev.preventDefault();
+                    setMenu({ x: ev.clientX, y: ev.clientY, path: e.path, dir: e.dir });
+                  }}
+                  style={{
+                    ...S.treeRow,
+                    color: e.path === activePath ? C.fg : e.dir ? C.dim : C.faint,
+                    background: e.path === activePath ? "#1e2636" : undefined,
+                  }}
+                  title={e.path}
+                >
+                  <span style={{ width: 13 }}>{e.dir ? "▸" : "·"}</span>
+                  <span style={S.ellipsis}>{e.name}</span>
+                </div>
+              ),
+            )}
+
+            {treeError && <div style={S.treeError}>{treeError}</div>}
             {entries.length === 0 && <div style={S.treeEmpty}>empty</div>}
           </div>
         )}
@@ -442,11 +599,30 @@ export function EditorPane(props: {
           )}
         </div>
       </div>
+
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuItems(menu.path, menu.dir)}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
 }
 
 const S: Record<string, React.CSSProperties> = {
+  inlineInput: {
+    flex: 1, minWidth: 0, background: "#0d0d11", color: C.fg,
+    border: "1px solid #2f6feb", borderRadius: 3, padding: "0 4px",
+    fontSize: 11, outline: "none", fontFamily: "inherit",
+  },
+  treeError: {
+    margin: "4px 6px", padding: "4px 6px", borderRadius: 4,
+    background: "#2a1214", border: "1px solid #6e2b30",
+    color: "#ffb4b4", fontSize: 10, whiteSpace: "pre-wrap",
+  },
   pane: { display: "flex", flexDirection: "column", height: "100%",
           background: "#0d0d11", color: C.fg, fontFamily: "system-ui", fontSize: 12,
           overflow: "hidden" },

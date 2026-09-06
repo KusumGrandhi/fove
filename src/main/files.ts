@@ -1,13 +1,25 @@
 /**
- * File service: read, write, and list, for the editor pane.
+ * File service: the operations an editor needs — read, write, list, and the
+ * tree actions (create, rename, duplicate, delete).
  *
  * Writes are atomic (temp + rename) and preserve the original file mode, so an
  * interrupted save can never truncate the user's source. Reads refuse binary
  * and oversized files rather than handing the editor megabytes of noise.
+ *
+ * Deletion goes to the system trash, never `unlink`. It is the one action here
+ * the user cannot undo, and the OS already provides the undo.
+ *
+ * Every mutating call returns `{ ok, error }` rather than throwing: these are
+ * driven by clicks, and a permission error should reach the tree as a message
+ * beside the file, not as an unhandled rejection.
  */
 
-import { readFile, writeFile, readdir, stat, rename, chmod } from "node:fs/promises";
+import {
+  readFile, writeFile, readdir, stat, rename, chmod, mkdir, copyFile, access,
+} from "node:fs/promises";
+import { constants } from "node:fs";
 import { join, dirname, basename, extname } from "node:path";
+import { shell } from "electron";
 
 /** Beyond this, an editor is the wrong tool. */
 const MAX_READ = 8 * 1024 * 1024;
@@ -138,6 +150,128 @@ export class FileService {
       });
     } catch {
       return [];
+    }
+  }
+}
+
+// --- tree operations -------------------------------------------------------
+
+/** The shape every mutating tree call returns. */
+export interface FsResult {
+  ok: boolean;
+  /** The resulting path, when the call produced one. */
+  path?: string;
+  error?: string;
+}
+
+const fail = (e: unknown): FsResult => ({
+  ok: false,
+  error: e instanceof Error ? e.message : String(e),
+});
+
+/** True when something already exists at `path`. */
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path, constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A path that does not collide, by inserting " copy", then " copy 2", ...
+ *
+ * The suffix goes before the extension so `notes.md` becomes `notes copy.md`
+ * and stays openable as markdown.
+ */
+async function uniquePath(path: string): Promise<string> {
+  if (!(await exists(path))) return path;
+  const dir = dirname(path);
+  const ext = extname(path);
+  const stem = basename(path, ext);
+  for (let n = 1; n < 1000; n++) {
+    const suffix = n === 1 ? " copy" : ` copy ${n}`;
+    const candidate = join(dir, `${stem}${suffix}${ext}`);
+    if (!(await exists(candidate))) return candidate;
+  }
+  throw new Error("could not find a free name");
+}
+
+export class FileTreeService {
+  /**
+   * Create an empty file, refusing to clobber an existing one.
+   *
+   * Silently overwriting is the failure mode that loses work, so a collision
+   * is an error the caller must show rather than something to resolve
+   * automatically.
+   */
+  async createFile(path: string): Promise<FsResult> {
+    try {
+      if (await exists(path)) return { ok: false, error: "already exists" };
+      await mkdir(dirname(path), { recursive: true });
+      // wx: fail if it appeared between the check and the write.
+      await writeFile(path, "", { flag: "wx" });
+      return { ok: true, path };
+    } catch (e) {
+      return fail(e);
+    }
+  }
+
+  async createDir(path: string): Promise<FsResult> {
+    try {
+      if (await exists(path)) return { ok: false, error: "already exists" };
+      await mkdir(path, { recursive: true });
+      return { ok: true, path };
+    } catch (e) {
+      return fail(e);
+    }
+  }
+
+  /**
+   * Rename or move. The caller must re-key any open editor model, or it keeps
+   * writing to a path that no longer exists.
+   */
+  async rename(from: string, to: string): Promise<FsResult> {
+    try {
+      if (from === to) return { ok: true, path: to };
+      // Case-only renames on a case-insensitive filesystem look like a
+      // collision but are legitimate, so compare exactly.
+      if (await exists(to)) return { ok: false, error: "a file with that name already exists" };
+      await mkdir(dirname(to), { recursive: true });
+      await rename(from, to);
+      return { ok: true, path: to };
+    } catch (e) {
+      return fail(e);
+    }
+  }
+
+  /** Copy a file beside itself, resolving the name. */
+  async duplicate(path: string): Promise<FsResult> {
+    try {
+      const st = await stat(path);
+      if (st.isDirectory()) return { ok: false, error: "cannot duplicate a folder yet" };
+      const target = await uniquePath(path);
+      await copyFile(path, target);
+      await chmod(target, st.mode & 0o777).catch(() => {});
+      return { ok: true, path: target };
+    } catch (e) {
+      return fail(e);
+    }
+  }
+
+  /**
+   * Move to the system trash.
+   *
+   * Never `unlink`: this is the only irreversible action in the tree, and the
+   * OS already has an undo for it. Works for directories too.
+   */
+  async trash(path: string): Promise<FsResult> {
+    try {
+      await shell.trashItem(path);
+      return { ok: true, path };
+    } catch (e) {
+      return fail(e);
     }
   }
 }

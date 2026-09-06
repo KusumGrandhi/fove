@@ -58,6 +58,7 @@ Today the file tree can only *open* files. Missing, in the order they hurt:
 | **Reveal in Finder** | Already exists as an IPC channel; just not in the tree. |
 | **Context menu** | Right-click. Everything above hangs off it. |
 | **Unsaved indicator** | A dot on a dirty tab, and a prompt before closing it. |
+few more things: cmd click to go to the defination, rendering the correct linter, codebase search :) lets add these too
 
 **Two things that will bite:**
 
@@ -185,6 +186,7 @@ Rules worth stating:
 
 Not asked for; offered because they follow from what is already built.
 
+**0. pop out a pane so that I can work in another screen, that would make my life really easy too.
 **a. Worktree switcher with live status.** You have 5+ worktrees. A palette
 listing each with its branch, dirty-file count, and whether an agent is
 currently running in it — jump straight to one. fove already reads all three

@@ -44,6 +44,13 @@ const CH = {
   fileWrite: "file:write",
   fileList: "file:list",
   filePick: "dialog:file",
+  fsCreateFile: "fs:create-file",
+  fsCreateDir: "fs:create-dir",
+  fsRename: "fs:rename",
+  fsDuplicate: "fs:duplicate",
+  fsTrash: "fs:trash",
+  fsWatch: "fs:watch",
+  fsChanged: "fs:changed",
   claudeSnapshot: "claude:snapshot",
   claudeSessions: "claude:sessions",
   skillsList: "skills:list",
@@ -115,6 +122,21 @@ const api = {
     ipcRenderer.invoke(CH.fileWrite, path, content, mtimeMs),
   fileList: (dir: string): Promise<unknown[]> => ipcRenderer.invoke(CH.fileList, dir),
   filePick: (): Promise<string | null> => ipcRenderer.invoke(CH.filePick),
+
+// ---- file tree ----------------------------------------------------------
+  fsCreateFile: (path: string): Promise<unknown> => ipcRenderer.invoke(CH.fsCreateFile, path),
+  fsCreateDir: (path: string): Promise<unknown> => ipcRenderer.invoke(CH.fsCreateDir, path),
+  fsRename: (from: string, to: string): Promise<unknown> =>
+    ipcRenderer.invoke(CH.fsRename, from, to),
+  fsDuplicate: (path: string): Promise<unknown> => ipcRenderer.invoke(CH.fsDuplicate, path),
+  fsTrash: (path: string): Promise<unknown> => ipcRenderer.invoke(CH.fsTrash, path),
+  /** Watch exactly these directories; replaces any previous set. */
+  fsWatch: (dirs: string[]): void => ipcRenderer.send(CH.fsWatch, dirs),
+  onFsChanged: (fn: (dir: string) => void): (() => void) => {
+    const h = (_e: unknown, dir: string): void => fn(dir);
+    ipcRenderer.on(CH.fsChanged, h);
+    return () => { ipcRenderer.removeListener(CH.fsChanged, h); };
+  },
 
   claudeSnapshot: (cwd: string, paneId?: string): Promise<unknown> =>
     ipcRenderer.invoke(CH.claudeSnapshot, cwd, paneId),

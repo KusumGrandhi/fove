@@ -41,6 +41,8 @@ import { TeamService } from "./teams.js";
 import { backgroundSessions } from "./sessions.js";
 import { IdeService } from "./ide.js";
 import { GitWriteService } from "./gitWrite.js";
+import { FileTreeService } from "./files.js";
+import { WatchService } from "./watch.js";
 import { readClaudeJson } from "../data/config/claudeJson.js";
 import { listSkills, sortSkills, budget, orphanUsage } from "../data/config/skills.js";
 import { listMemories } from "../data/config/memory.js";
@@ -110,6 +112,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   ptys.killAll();
+  watcher.closeAll();
   // Remove the lock file, so Claude is never offered a dead IDE.
   void ide.stop();
 });
@@ -229,6 +232,18 @@ ipcMain.handle(CH.gitStashList, (_e, cwd: string) => gitw.stashList(cwd));
 ipcMain.handle(CH.gitCommits, (_e, cwd: string, limit?: number) => gitw.log(cwd, limit ?? 200));
 ipcMain.handle(CH.gitBlame, (_e, cwd: string, path: string) => gitw.blame(cwd, path));
 ipcMain.handle(CH.gitBranches, (_e, cwd: string) => gitw.branches(cwd));
+
+// ---- file tree ------------------------------------------------------------
+const tree = new FileTreeService();
+// One watcher set, following whatever directories the editor has open.
+const watcher = new WatchService((dir) => send(CH.fsChanged, dir));
+
+ipcMain.handle(CH.fsCreateFile, (_e, path: string) => tree.createFile(path));
+ipcMain.handle(CH.fsCreateDir, (_e, path: string) => tree.createDir(path));
+ipcMain.handle(CH.fsRename, (_e, from: string, to: string) => tree.rename(from, to));
+ipcMain.handle(CH.fsDuplicate, (_e, path: string) => tree.duplicate(path));
+ipcMain.handle(CH.fsTrash, (_e, path: string) => tree.trash(path));
+ipcMain.on(CH.fsWatch, (_e, dirs: string[]) => watcher.sync(dirs ?? []));
 
 ipcMain.handle(CH.agentsList, async (_e, cwd?: string) => {
   const { listAgents } = await import("../data/config/agents.js");
