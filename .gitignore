@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.log
+
+# Never commit anything derived from the user's Claude config
+providers.json
+.env
+.env.*
+*.key
+*.pem
+
+# Local scratch
+.DS_Store
+.cache/
+scratch/
