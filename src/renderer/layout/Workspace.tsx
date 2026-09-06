@@ -9,8 +9,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  dropEdge, dropPreview, edgeToSplit, movePane, place, resize, swapPanes,
-  type DropEdge, type Node, type Rect,
+  canMovePane, dropEdge, dropPreview, edgeToSplit, movePaneChecked, place, resize,
+  swapPanesChecked, type DropEdge, type Node, type Pins, type Rect,
 } from "../../shared/layout.js";
 
 export interface WorkspaceProps {
@@ -25,6 +25,8 @@ export interface WorkspaceProps {
   focusedPaneId?: string;
   onFocusPane: (paneId: string) => void;
   gap?: number;
+  /** Pane ids that refuse to be moved, displaced or closed. */
+  pins?: Pins;
 }
 
 interface PaneDrag {
@@ -33,7 +35,7 @@ interface PaneDrag {
   x: number;
   y: number;
   /** Where the drop would land, once the pointer is over another pane. */
-  over?: { paneId: string; edge: DropEdge; rect: Rect };
+  over?: { paneId: string; edge: DropEdge; rect: Rect; blocked: boolean };
 }
 
 interface DragState {
@@ -44,8 +46,11 @@ interface DragState {
   extent: number;
 }
 
+const NO_PINS: Pins = new Set<string>();
+
 export function Workspace(props: WorkspaceProps) {
   const gap = props.gap ?? 6;
+  const pins = props.pins ?? NO_PINS;
   const hostRef = useRef<HTMLDivElement>(null);
   const [rect, setRect] = useState<Rect>({ x: 0, y: 0, w: 0, h: 0 });
   const dragRef = useRef<DragState | null>(null);
@@ -89,6 +94,9 @@ export function Workspace(props: WorkspaceProps) {
       // Left button only; ignore clicks on the header's own buttons.
       if (e.button !== 0) return;
       if ((e.target as HTMLElement).closest("button")) return;
+      // A pinned pane never starts a drag -- refusing only at the drop would
+      // let it visibly detach first.
+      if (pins.has(paneId)) return;
       e.preventDefault();
       const host = hostRef.current;
       if (!host) return;
@@ -98,7 +106,7 @@ export function Workspace(props: WorkspaceProps) {
       setPaneDrag(next);
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     },
-    [],
+    [pins],
   );
 
   const onPointerMove = useCallback(
@@ -117,7 +125,12 @@ export function Workspace(props: WorkspaceProps) {
         );
         const over =
           target && target.paneId !== pd.paneId
-            ? { paneId: target.paneId, edge: dropEdge(target, px, py), rect: target }
+            ? {
+                paneId: target.paneId,
+                edge: dropEdge(target, px, py),
+                rect: target,
+                blocked: !canMovePane(pins, pd.paneId, target.paneId),
+              }
             : undefined;
         const next: PaneDrag = { ...pd, x: px, y: py, over };
         paneDragRef.current = next;
@@ -132,7 +145,7 @@ export function Workspace(props: WorkspaceProps) {
       const usable = Math.max(1, drag.extent - gap);
       props.onTreeChange(resize(props.tree, drag.branchId, (pos - drag.origin) / usable));
     },
-    [gap, props, panes],
+    [gap, props, panes, pins],
   );
 
   const endDrag = useCallback(
@@ -141,12 +154,12 @@ export function Workspace(props: WorkspaceProps) {
       if (pd) {
         paneDragRef.current = null;
         setPaneDrag(null);
-        if (pd.over) {
+        if (pd.over && !pd.over.blocked) {
           const split = edgeToSplit(pd.over.edge);
           props.onTreeChange(
             split
-              ? movePane(props.tree, pd.paneId, pd.over.paneId, split.dir, split.before)
-              : swapPanes(props.tree, pd.paneId, pd.over.paneId),
+              ? movePaneChecked(props.tree, pins, pd.paneId, pd.over.paneId, split.dir, split.before)
+              : swapPanesChecked(props.tree, pins, pd.paneId, pd.over.paneId),
           );
         }
       }
@@ -157,7 +170,7 @@ export function Workspace(props: WorkspaceProps) {
         // Capture may already be gone.
       }
     },
-    [props],
+    [props, pins],
   );
 
   return (
@@ -194,20 +207,29 @@ export function Workspace(props: WorkspaceProps) {
 
       {/* Drop indicator: shows exactly where the pane will land. */}
       {paneDrag?.over && (() => {
-        const prev = dropPreview(paneDrag.over.rect, paneDrag.over.edge);
+        const blocked = paneDrag.over.blocked;
+        // A refused drop highlights the whole target, not a half -- there is no
+        // landing spot to preview.
+        const prev = blocked
+          ? paneDrag.over.rect
+          : dropPreview(paneDrag.over.rect, paneDrag.over.edge);
         const swap = paneDrag.over.edge === "center";
+        const accent = blocked ? "#d1444a" : swap ? "#d29922" : "#2f6feb";
+        const wash = blocked
+          ? "rgba(209,68,74,0.14)"
+          : swap ? "rgba(210,153,34,0.16)" : "rgba(47,111,235,0.20)";
         return (
           <div
             style={{
               position: "absolute", left: prev.x, top: prev.y, width: prev.w, height: prev.h,
-              background: swap ? "rgba(210,153,34,0.16)" : "rgba(47,111,235,0.20)",
-              border: `2px solid ${swap ? "#d29922" : "#2f6feb"}`,
+              background: wash,
+              border: `2px ${blocked ? "dashed" : "solid"} ${accent}`,
               borderRadius: 6, pointerEvents: "none", zIndex: 20,
               display: "flex", alignItems: "center", justifyContent: "center",
               color: "#e6e6ea", fontFamily: "system-ui", fontSize: 11,
             }}
           >
-            {swap ? "swap" : ""}
+            {blocked ? "📌 pinned" : swap ? "swap" : ""}
           </div>
         );
       })()}
@@ -217,12 +239,13 @@ export function Workspace(props: WorkspaceProps) {
         <div
           style={{
             position: "absolute", left: paneDrag.x + 12, top: paneDrag.y + 12,
-            padding: "2px 8px", background: "#1e1e26", border: "1px solid #2f6feb",
+            padding: "2px 8px", background: "#1e1e26",
+            border: `1px solid ${paneDrag.over?.blocked ? "#d1444a" : "#2f6feb"}`,
             borderRadius: 5, color: "#e6e6ea", fontFamily: "system-ui", fontSize: 11,
             pointerEvents: "none", zIndex: 30,
           }}
         >
-          moving pane
+          {paneDrag.over?.blocked ? "can't drop here" : "moving pane"}
         </div>
       )}
 

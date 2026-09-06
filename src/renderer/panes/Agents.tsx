@@ -8,14 +8,58 @@
  * checked rather than assumed.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { C } from "../ui/Chrome.js";
 import { fmtDur, fmtTokens, statusColor, useSnapshot, type AgentWire } from "../ui/widgets.js";
 
-type View = "tree" | "timeline";
+type View = "tree" | "timeline" | "sessions";
+
+/**
+ * A background session: a peer `claude` session in the same project folder,
+ * with its own transcript. Distinct from a Task subagent (nested inside one
+ * transcript) and from a teammate (its own tmux pane), and invisible to both
+ * of those views because it is a sibling file rather than a nested record.
+ */
+interface BgSession {
+  sessionId: string;
+  path: string;
+  name?: string;
+  state: "working" | "needs-input" | "done" | "idle";
+  mtimeMs: number;
+  isCurrent: boolean;
+}
+
+/** Poll the project folder for peer sessions. */
+function useBackgroundSessions(cwd: string, everyMs = 3000): BgSession[] {
+  const [rows, setRows] = useState<BgSession[]>([]);
+  useEffect(() => {
+    if (!cwd) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = (await window.th.bgSessions(cwd)) as BgSession[];
+        if (alive) setRows(r ?? []);
+      } catch {
+        // A folder with no sessions is normal, not an error.
+      }
+    };
+    void tick();
+    const t = setInterval(tick, everyMs);
+    return () => { alive = false; clearInterval(t); };
+  }, [cwd, everyMs]);
+  return rows;
+}
+
+const STATE_COLOR: Record<BgSession["state"], string> = {
+  "working": "#3fb950",
+  "needs-input": "#d29922",
+  "done": "#8b949e",
+  "idle": "#6e7681",
+};
 
 export function AgentsPane(props: { cwd: string }) {
   const snap = useSnapshot(props.cwd, 2000);
+  const bg = useBackgroundSessions(props.cwd);
   const [view, setView] = useState<View>("tree");
   const [selected, setSelected] = useState<string | null>(null);
 
@@ -37,6 +81,14 @@ export function AgentsPane(props: { cwd: string }) {
       <div style={S.bar}>
         <button style={tabStyle(view === "tree")} onClick={() => setView("tree")}>tree</button>
         <button style={tabStyle(view === "timeline")} onClick={() => setView("timeline")}>timeline</button>
+        <button style={tabStyle(view === "sessions")} onClick={() => setView("sessions")}>
+          sessions
+          {bg.filter((b) => b.state === "working" || b.state === "needs-input").length > 0 && (
+            <span style={S.badge}>
+              {bg.filter((b) => b.state === "working" || b.state === "needs-input").length}
+            </span>
+          )}
+        </button>
         <div style={{ flex: 1 }} />
         <span style={S.meta}>
           {agents.length} agents
@@ -44,7 +96,29 @@ export function AgentsPane(props: { cwd: string }) {
         </span>
       </div>
 
-      {agents.length === 0 ? (
+      {view === "sessions" ? (
+        bg.length === 0 ? (
+          <div style={S.empty}>no claude sessions in this folder</div>
+        ) : (
+          <div style={S.list}>
+            {bg.map((b) => (
+              <div
+                key={b.sessionId}
+                style={{ ...S.row, opacity: b.state === "idle" ? 0.55 : 1 }}
+                title={`${b.path}\nclick to open the transcript`}
+                onClick={() => window.th.openInEditor(b.path)}
+              >
+                <span style={{ color: STATE_COLOR[b.state] }}>●</span>
+                <span style={{ color: C.fg, flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {b.name ?? b.sessionId.slice(0, 8)}
+                </span>
+                {b.isCurrent && <span style={S.here}>this pane</span>}
+                <span style={{ color: C.faint }}>{b.state}</span>
+              </div>
+            ))}
+          </div>
+        )
+      ) : agents.length === 0 ? (
         <div style={S.empty}>
           {snap ? "no subagents in this session" : "no claude session in this folder"}
         </div>
@@ -192,6 +266,10 @@ const tabStyle = (on: boolean): React.CSSProperties => ({
 });
 
 const S: Record<string, React.CSSProperties> = {
+  badge: { marginLeft: 5, padding: "0 5px", borderRadius: 8, background: "#3fb950",
+           color: "#0d0d11", fontSize: 10, fontWeight: 600 },
+  here: { padding: "0 5px", borderRadius: 3, background: "#1c2333",
+          color: "#58a6ff", fontSize: 10 },
   pane: { display: "flex", flexDirection: "column", height: "100%", background: "#0d0d11",
           color: C.fg, fontFamily: "system-ui", fontSize: 12, overflow: "hidden" },
   bar: { display: "flex", alignItems: "center", gap: 4, padding: "4px 8px",

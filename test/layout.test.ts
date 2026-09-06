@@ -2,6 +2,8 @@ import { describe, expect, test, beforeEach } from "vitest";
 import {
   leaf, split, closePane, resize, movePane, place, paneIds, isValid,
   clampRatio, MIN_RATIO, __resetIds, dropEdge, edgeToSplit, dropPreview, swapPanes, type Node,
+  isPinned, setPanePinned, prunePins, canMovePane, canClosePane,
+  movePaneChecked, swapPanesChecked, closePaneChecked,
 } from "../src/shared/layout.js";
 
 beforeEach(() => __resetIds());
@@ -265,5 +267,81 @@ describe("swapPanes", () => {
     const after = swapPanes(t, "a", "b");
     expect(paneIds(after).sort()).toEqual(["a", "b", "c"]);
     expect(isValid(after)).toBe(true);
+  });
+});
+
+describe("pane pinning", () => {
+  const pins = (...ids: string[]) => new Set(ids);
+  /** a | (b | c) */
+  const tree = (): Node => split(split(leaf("a"), "a", "b", "row"), "b", "c", "row");
+
+  test("setPanePinned toggles, and is identity when already in that state", () => {
+    const p = setPanePinned(new Set(), "a", true);
+    expect(isPinned(p, "a")).toBe(true);
+    expect(setPanePinned(p, "a", true)).toBe(p);
+    expect(isPinned(setPanePinned(p, "a", false), "a")).toBe(false);
+  });
+
+  test("a pinned pane cannot be moved", () => {
+    const t = tree();
+    expect(movePaneChecked(t, pins("a"), "a", "c", "row")).toBe(t);
+  });
+
+  test("a pinned pane cannot be displaced by another pane dropping on it", () => {
+    const t = tree();
+    expect(movePaneChecked(t, pins("c"), "a", "c", "row")).toBe(t);
+  });
+
+  test("swapping is blocked from either side -- a swap relocates it just as a drag does", () => {
+    const t = tree();
+    expect(swapPanesChecked(t, pins("a"), "a", "c")).toBe(t);
+    expect(swapPanesChecked(t, pins("c"), "a", "c")).toBe(t);
+  });
+
+  test("a pinned pane cannot be closed, and the tree is untouched", () => {
+    const t = tree();
+    expect(closePaneChecked(t, pins("b"), "b")).toBe(t);
+    expect(paneIds(closePaneChecked(t, pins("b"), "b") as Node)).toEqual(["a", "b", "c"]);
+  });
+
+  test("closing the last pane still works when it is not pinned", () => {
+    expect(closePaneChecked(leaf("a"), pins("b"), "a")).toBeNull();
+  });
+
+  test("unpinned panes move, swap and close normally", () => {
+    const t = tree();
+    const p = pins("a");
+    expect(paneIds(movePaneChecked(t, p, "b", "c", "column"))).toEqual(["a", "c", "b"]);
+    expect(paneIds(swapPanesChecked(t, p, "b", "c"))).toEqual(["a", "c", "b"]);
+    expect(paneIds(closePaneChecked(t, p, "b") as Node)).toEqual(["a", "c"]);
+  });
+
+  test("resizing is deliberately allowed -- a divider is shared with a neighbour", () => {
+    const t = tree() as Extract<Node, { kind: "branch" }>;
+    const after = resize(t, t.id, 0.7) as Extract<Node, { kind: "branch" }>;
+    expect(after.ratio).toBeCloseTo(0.7);
+  });
+
+  test("splitting off a pinned pane is allowed and keeps it in the tree", () => {
+    const after = split(tree(), "a", "d", "column");
+    expect(paneIds(after)).toContain("a");
+    expect(paneIds(after)).toContain("d");
+    expect(isValid(after)).toBe(true);
+  });
+
+  test("prunePins drops pins whose pane is gone, and keeps the set when nothing changed", () => {
+    const t = tree();
+    const p = pins("a", "b");
+    expect(prunePins(p, t)).toBe(p);
+    const closed = closePane(t, "b")!;
+    expect([...prunePins(p, closed)]).toEqual(["a"]);
+    expect([...prunePins(p, null)]).toEqual([]);
+  });
+
+  test("a move blocked by a pin leaves the tree valid and complete", () => {
+    const t = tree();
+    const after = movePaneChecked(t, pins("a"), "a", "c", "row");
+    expect(isValid(after)).toBe(true);
+    expect(paneIds(after)).toEqual(["a", "b", "c"]);
   });
 });

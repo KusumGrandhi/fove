@@ -39,6 +39,7 @@ const CH = {
   teamCapture: "teams:capture",
   teamSend: "teams:send",
   teamInterrupt: "teams:interrupt",
+  bgSessions: "sessions:background",
 } as const;
 
 interface SpawnRequest {
@@ -96,6 +97,8 @@ const api = {
   skillsToggle: (name: string, current?: string): Promise<boolean> =>
     ipcRenderer.invoke(CH.skillsToggle, name, current),
   memoryList: (): Promise<unknown[]> => ipcRenderer.invoke(CH.memoryList),
+
+  bgSessions: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.bgSessions, cwd),
 
   teamsList: (): Promise<unknown[]> => ipcRenderer.invoke(CH.teamsList),
   teamCapture: (socket: string, paneId: string, lines?: number): Promise<string> =>

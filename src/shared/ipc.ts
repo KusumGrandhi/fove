@@ -42,4 +42,5 @@ export const CH = {
   teamCapture: "teams:capture",
   teamSend: "teams:send",
   teamInterrupt: "teams:interrupt",
+  bgSessions: "sessions:background",
 } as const;

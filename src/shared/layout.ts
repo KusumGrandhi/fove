@@ -260,3 +260,76 @@ export function dropPreview(rect: Rect, edge: DropEdge): Rect {
     case "center": return rect;
   }
 }
+
+// --- pinning ---------------------------------------------------------------
+
+/**
+ * Pane pinning: "this pane stays where it is, and stays alive".
+ *
+ * Pins live outside the tree, as a set of pane ids, for two reasons: the tree
+ * is rewritten wholesale on every split/close/move (so a flag inside it would
+ * have to be carefully carried through each rewrite), and a pin is a property
+ * of the *pane*, not of the geometry node that currently holds it.
+ *
+ * What a pin blocks:
+ *   - moving the pane (dragging it somewhere else)
+ *   - swapping it with another pane -- a swap relocates it just as a drag does,
+ *     so blocking one and not the other would be a hole
+ *   - closing it
+ *
+ * What a pin deliberately allows:
+ *   - resizing, because a divider is shared with a neighbour and freezing it
+ *     would freeze unpinned panes too
+ *   - splitting off it, which adds a sibling while the pinned pane keeps both
+ *     its content and its position in the tree
+ */
+export type Pins = ReadonlySet<string>;
+
+export const isPinned = (pins: Pins, paneId: string): boolean => pins.has(paneId);
+
+/** Toggle one pane's pin, returning a new set. */
+export function setPanePinned(pins: Pins, paneId: string, pinned: boolean): Pins {
+  if (pins.has(paneId) === pinned) return pins;
+  const next = new Set(pins);
+  if (pinned) next.add(paneId); else next.delete(paneId);
+  return next;
+}
+
+/** Drop pins for panes that no longer exist, so the set can't leak forever. */
+export function prunePins(pins: Pins, root: Node | null): Pins {
+  const live = new Set(root ? paneIds(root) : []);
+  const kept = [...pins].filter((id) => live.has(id));
+  return kept.length === pins.size ? pins : new Set(kept);
+}
+
+/** A move is refused when either end is pinned: the source moves, the target is displaced. */
+export function canMovePane(pins: Pins, paneId: string, targetPaneId: string): boolean {
+  return !pins.has(paneId) && !pins.has(targetPaneId);
+}
+
+export const canClosePane = (pins: Pins, paneId: string): boolean => !pins.has(paneId);
+
+/** movePane, refusing to relocate a pinned pane or displace a pinned target. */
+export function movePaneChecked(
+  root: Node,
+  pins: Pins,
+  paneId: string,
+  targetPaneId: string,
+  dir: Dir,
+  before = false,
+): Node {
+  if (!canMovePane(pins, paneId, targetPaneId)) return root;
+  return movePane(root, paneId, targetPaneId, dir, before);
+}
+
+/** swapPanes, refusing when either pane is pinned. */
+export function swapPanesChecked(root: Node, pins: Pins, a: string, b: string): Node {
+  if (!canMovePane(pins, a, b)) return root;
+  return swapPanes(root, a, b);
+}
+
+/** closePane, refusing to close a pinned pane. */
+export function closePaneChecked(root: Node, pins: Pins, paneId: string): Node | null {
+  if (!canClosePane(pins, paneId)) return root;
+  return closePane(root, paneId);
+}

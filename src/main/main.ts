@@ -14,6 +14,7 @@ import { GitService } from "./git.js";
 import { FileService } from "./files.js";
 import { ClaudeSessionService, toWire } from "./claudeSession.js";
 import { TeamService } from "./teams.js";
+import { backgroundSessions } from "./sessions.js";
 import { readClaudeJson } from "../data/config/claudeJson.js";
 import { listSkills, sortSkills, budget, orphanUsage } from "../data/config/skills.js";
 import { listMemories } from "../data/config/memory.js";
@@ -153,6 +154,8 @@ ipcMain.handle(CH.skillsToggle, async (_e, name: string, current?: string) => {
   return true;
 });
 ipcMain.handle(CH.memoryList, () => listMemories());
+
+ipcMain.handle(CH.bgSessions, (_e, cwd: string) => backgroundSessions(cwd));
 
 ipcMain.handle(CH.teamsList, () => teamSvc.list());
 ipcMain.handle(CH.teamCapture, (_e, socket: string, paneId: string, lines?: number) =>

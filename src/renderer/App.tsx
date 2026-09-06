@@ -6,7 +6,7 @@
  * git tree, or an editor without touching the layout code.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Workspace } from "./layout/Workspace.js";
 import { TerminalPane } from "./panes/Terminal.js";
 import { GitStatusPane } from "./panes/GitStatus.js";
@@ -17,7 +17,8 @@ import { TeammateBar, TeammateView, useTeammates } from "./ui/Teammates.js";
 import { C, Divider, ToolButton } from "./ui/Chrome.js";
 import { close as closeTab, insert as insertTab, setPinned } from "../shared/tabs.js";
 import {
-  closePane, isValid, leaf, newId, paneIds, split, type Dir, type Node,
+  closePane, closePaneChecked, isValid, leaf, newId, paneIds, prunePins, setPanePinned,
+  split, type Dir, type Node, type Pins,
 } from "../shared/layout.js";
 
 type PaneKind = "shell" | "claude" | "git" | "editor" | "agents";
@@ -46,6 +47,12 @@ interface Tab {
   branch?: string;
   /** Pinned tabs hold the front of the bar and keep their exact position. */
   pinned?: boolean;
+  /**
+   * Panes that refuse to be moved, displaced or closed. Stored as an array
+   * rather than a Set because the whole tab is JSON-persisted, and a Set
+   * round-trips to `{}`.
+   */
+  pinnedPanes?: string[];
   tree: Node;
   panes: Record<string, PaneSpec>;
   focusedPaneId: string;
@@ -97,7 +104,14 @@ export function App() {
         saved.tabs.every((t) => t.tree && isValid(t.tree));
       if (usable) {
         // Tabs saved before workspaces had no cwd; adopt the launch directory.
-        setTabs(saved!.tabs.map((t) => ({ ...t, cwd: t.cwd || cwd, name: t.name || cwd.split("/").pop()! })));
+        setTabs(saved!.tabs.map((t) => ({
+          ...t,
+          cwd: t.cwd || cwd,
+          name: t.name || cwd.split("/").pop()!,
+          // A pin for a pane that no longer exists would be invisible and
+          // impossible to clear from the UI.
+          pinnedPanes: [...prunePins(new Set(t.pinnedPanes ?? []), t.tree)],
+        })));
         setActiveTabId(
           saved!.tabs.some((t) => t.id === saved!.activeTabId)
             ? saved!.activeTabId
@@ -124,6 +138,25 @@ export function App() {
     setTabs((prev) => prev.map((t) => (t.id === id ? fn(t) : t)));
   }, []);
 
+  /** Pinned panes of the active tab, as the Set the layout engine expects. */
+  const panePins: Pins = useMemo(
+    () => new Set(active?.pinnedPanes ?? []),
+    [active?.pinnedPanes],
+  );
+
+  /** Pin or unpin one pane. */
+  const togglePanePin = useCallback(
+    (paneId: string) => {
+      if (!active) return;
+      updateTab(active.id, (t) => {
+        const pins = new Set(t.pinnedPanes ?? []);
+        const next = setPanePinned(pins, paneId, !pins.has(paneId));
+        return { ...t, pinnedPanes: [...next] };
+      });
+    },
+    [active, updateTab],
+  );
+
   // ---- pane actions --------------------------------------------------------
   const doSplit = useCallback(
     (dir: Dir, kind: PaneKind = "shell") => {
@@ -142,6 +175,8 @@ export function App() {
   const doClosePane = useCallback(() => {
     if (!active) return;
     const target = active.focusedPaneId;
+    // A pinned pane declines to close. Unpin it first -- that is the whole point.
+    if ((active.pinnedPanes ?? []).includes(target)) return;
     const next = closePane(active.tree, target);
     window.th.kill(target);
     if (next === null) {
@@ -161,10 +196,12 @@ export function App() {
     updateTab(active.id, (t) => {
       const { [target]: _gone, ...panes } = t.panes;
       const remaining = paneIds(next);
+      const pins = [...prunePins(new Set(t.pinnedPanes ?? []), next)];
       return {
         ...t,
         tree: next,
         panes,
+        pinnedPanes: pins,
         focusedPaneId: remaining.includes(t.focusedPaneId) ? t.focusedPaneId : remaining[0]!,
       };
     });
@@ -214,6 +251,7 @@ export function App() {
       else if (e.key === "e") { e.preventDefault(); doSplit("row", "editor"); }
       else if (e.key === "r") { e.preventDefault(); doSplit("row", "agents"); }
       else if (e.key === "p" && e.shiftKey) { e.preventDefault(); togglePin(activeTabId); }
+      else if (e.key === "p") { e.preventDefault(); if (active) togglePanePin(active.focusedPaneId); }
       else if (e.key === "Enter") { e.preventDefault(); doSplit("row", "claude"); }
       else if (/^[1-9]$/.test(e.key)) {
         const i = Number(e.key) - 1;
@@ -222,7 +260,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [doSplit, doClosePane, addTab, tabs, togglePin, activeTabId]);
+  }, [doSplit, doClosePane, addTab, tabs, togglePin, activeTabId, active, togglePanePin]);
 
   // The rail watches whatever directory the active tab is pointed at. The hook
   // runs unconditionally -- before the `!active` early return -- because hooks
@@ -289,6 +327,13 @@ export function App() {
         <ToolButton label="Editor" hint="⌘E" icon="◧" onClick={() => doSplit("row", "editor")} />
         <ToolButton label="Agents" hint="⌘R" icon="◉" onClick={() => doSplit("row", "agents")} />
         <Divider />
+        <ToolButton
+          label={active && panePins.has(active.focusedPaneId) ? "Unpin pane" : "Pin pane"}
+          hint="⌘P"
+          icon={active && panePins.has(active.focusedPaneId) ? "📌" : "⚲"}
+          onClick={() => { if (active) togglePanePin(active.focusedPaneId); }}
+        />
+        <Divider />
         <ToolButton label="Open folder" hint="⌘T" icon="＋" onClick={() => void addTab()} />
         {worktrees.length > 1 && (
           <select
@@ -333,12 +378,14 @@ export function App() {
         <div style={S.workspace}>
           <Workspace
             tree={active.tree}
+            pins={panePins}
             focusedPaneId={active.focusedPaneId}
             onFocusPane={(paneId) => updateTab(active.id, (t) => ({ ...t, focusedPaneId: paneId }))}
             onTreeChange={(tree) => updateTab(active.id, (t) => ({ ...t, tree }))}
             renderPane={(paneId, focused, dragHandle) => {
               const spec = active.panes[paneId];
               if (!spec) return null;
+              const isPin = panePins.has(paneId);
               return (
                 <div style={S.paneBox}>
                   <div
@@ -346,11 +393,11 @@ export function App() {
                     style={{
                       ...S.paneHeader,
                       ...(focused ? S.paneHeaderActive : null),
-                      cursor: "grab",
+                      cursor: isPin ? "default" : "grab",
                     }}
-                    title="Drag to move this pane"
+                    title={isPin ? "Pinned: this pane stays put" : "Drag to move this pane"}
                   >
-                    <span style={S.gripDots}>⠿</span>
+                    <span style={{ ...S.gripDots, opacity: isPin ? 0.25 : 1 }}>⠿</span>
                     <span style={{ color: focused ? C.fg : C.faint }}>
                       {spec.kind === "claude" ? "✳ claude"
                         : spec.kind === "git" ? "⎇ git"
@@ -360,10 +407,22 @@ export function App() {
                     </span>
                     <div style={S.grow} />
                     <button
-                      style={S.paneClose}
-                      title="Close this pane"
+                      style={{ ...S.paneClose, color: isPin ? C.accent : undefined }}
+                      title={isPin ? "Unpin this pane" : "Pin this pane in place"}
                       onClick={(e) => {
                         e.stopPropagation();
+                        togglePanePin(paneId);
+                      }}
+                    >
+                      {isPin ? "📌" : "⚲"}
+                    </button>
+                    <button
+                      style={{ ...S.paneClose, opacity: isPin ? 0.3 : 1 }}
+                      disabled={isPin}
+                      title={isPin ? "Pinned panes can't be closed -- unpin first" : "Close this pane"}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (isPin) return;
                         updateTab(active.id, (t) => ({ ...t, focusedPaneId: paneId }));
                         setTimeout(doClosePane, 0);
                       }}
