@@ -223,7 +223,7 @@ export function App() {
         />
       </div>
 
-      {/* --- the panes live inside this frame --- */}
+      {/* --- the panes live inside this frame, beside the stats rail --- */}
       <div style={S.stage}>
         <div style={S.workspace}>
           <Workspace
@@ -231,12 +231,21 @@ export function App() {
             focusedPaneId={active.focusedPaneId}
             onFocusPane={(paneId) => updateTab(active.id, (t) => ({ ...t, focusedPaneId: paneId }))}
             onTreeChange={(tree) => updateTab(active.id, (t) => ({ ...t, tree }))}
-            renderPane={(paneId, focused) => {
+            renderPane={(paneId, focused, dragHandle) => {
               const spec = active.panes[paneId];
               if (!spec) return null;
               return (
                 <div style={S.paneBox}>
-                  <div style={{ ...S.paneHeader, ...(focused ? S.paneHeaderActive : null) }}>
+                  <div
+                    {...dragHandle}
+                    style={{
+                      ...S.paneHeader,
+                      ...(focused ? S.paneHeaderActive : null),
+                      cursor: "grab",
+                    }}
+                    title="Drag to move this pane"
+                  >
+                    <span style={S.gripDots}>⠿</span>
                     <span style={{ color: focused ? C.fg : C.faint }}>
                       {spec.kind === "claude" ? "✳ claude" : spec.kind === "git" ? "⎇ git" : "❯ shell"}
                     </span>
@@ -271,6 +280,14 @@ export function App() {
             }}
           />
         </div>
+
+        {/* Stats rail: permanent, intentionally empty. Widgets land here. */}
+        <aside style={S.rail}>
+          <div style={S.railHeader}>STATS</div>
+          <div style={S.railBody}>
+            <div style={S.railPlaceholder}>widgets go here</div>
+          </div>
+        </aside>
       </div>
 
       {/* --- status bar --- */}
@@ -345,6 +362,23 @@ const S: Record<string, React.CSSProperties> = {
     cursor: "pointer", fontSize: 11, padding: "0 3px", lineHeight: 1,
   },
   paneBody: { flex: 1, minHeight: 0, overflow: "hidden" },
+
+  rail: {
+    width: 260, flexShrink: 0, marginLeft: 10,
+    display: "flex", flexDirection: "column",
+    background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10,
+    overflow: "hidden",
+  },
+  railHeader: {
+    padding: "7px 11px", fontSize: 10, letterSpacing: 0.6, color: C.faint,
+    borderBottom: `1px solid ${C.line}`, flexShrink: 0,
+  },
+  railBody: { flex: 1, minHeight: 0, overflowY: "auto", padding: 10 },
+  railPlaceholder: {
+    height: "100%", display: "flex", alignItems: "center", justifyContent: "center",
+    color: "#33333c", fontSize: 11, border: `1px dashed ${C.line}`, borderRadius: 8,
+  },
+  gripDots: { color: C.faint, fontSize: 12, lineHeight: 1, marginRight: 2 },
 
   statusbar: {
     display: "flex", alignItems: "center", gap: 6,

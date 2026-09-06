@@ -25,12 +25,22 @@ npm run dev          # build + launch
 │  │ │               ││                      │ │  │
 │  │ └───────────────┘└──────────────────────┘ │  │
 │  └────────────────────────────────────────────┘  │
+│  ┌ ⠿ ❯ shell ────┐┌ ⠿ ⎇ git ──────┐  ┌ STATS ─┐  │
+│  │               ││               │  │ widgets│  │
+│  └───────────────┘└───────────────┘  └────────┘  │
 ├─ status bar ── 2 panes · tab 1 of 1 ─────────────┤
 └──────────────────────────────────────────────────┘
 ```
 
 Every shortcut is also a toolbar button, and every pane has its own ✕. The
 panes sit inside a framed workspace rather than filling the window edge to edge.
+
+**Drag a pane by its ⠿ header** to move it. Dropping near an edge splits that
+pane (left/right/top/bottom); dropping in the middle swaps the two. A blue
+overlay previews exactly where it will land, amber for a swap.
+
+The **STATS rail** on the right is permanent and currently empty — it is where
+widgets will live.
 
 ## Keys
 

@@ -136,20 +136,44 @@ async function runSmoke(): Promise<void> {
 
     // --- the pane renders inside the real window ---
     await sleep(3000);
-    const clickBtn = async (re: string) =>
-      win!.webContents.executeJavaScript(
-        `[...document.querySelectorAll("button")].find(b=>${re}.test(b.innerText))?.click(), document.querySelectorAll("[data-pane]").length`,
-      );
-    const seq: Record<string, unknown> = {};
-    seq.start = await clickBtn("/never-matches/");
-    await clickBtn("/\\bSplit\\b(?!\\s*down)/"); await sleep(1200);
-    seq.afterSplit = await clickBtn("/never-matches/");
-    await clickBtn("/Split down/"); await sleep(1200);
-    seq.afterSplitDown = await clickBtn("/never-matches/");
+    const js = (code: string) => win!.webContents.executeJavaScript(code);
+    const clickBtn = (re: string) =>
+      js(`[...document.querySelectorAll("button")].find(b=>${re}.test(b.innerText))?.click(), 1`);
+    const paneOrder = () =>
+      js(`[...document.querySelectorAll("[data-pane]")].map(e=>e.getAttribute("data-pane")+":"+Math.round(e.getBoundingClientRect().left)).join(",")`);
+
+    // Build a 3-pane layout via the toolbar.
+    await clickBtn("/\\bSplit\\b(?!\\s*down)/"); await sleep(1000);
     await clickBtn("/\\bGit\\b/"); await sleep(1500);
-    seq.afterGit = await clickBtn("/never-matches/");
-    await clickBtn("/Close pane/"); await sleep(1200);
-    seq.afterClose = await clickBtn("/never-matches/");
+    const seq: Record<string, unknown> = {};
+    seq.panes = await js(`document.querySelectorAll("[data-pane]").length`);
+    seq.before = await paneOrder();
+
+    // The rail must exist and be empty.
+    seq.rail = await js(`!!document.body.innerText.match(/STATS/)`);
+    seq.railEmpty = await js(`!!document.body.innerText.match(/widgets go here/)`);
+
+    // Drag the LAST pane's header onto the FIRST pane's left edge.
+    seq.drag = await js(`(() => {
+      const panes = [...document.querySelectorAll("[data-pane]")];
+      if (panes.length < 2) return "too-few";
+      const src = panes[panes.length - 1];
+      const dst = panes[0];
+      const handle = src.querySelector("[title='Drag to move this pane']");
+      if (!handle) return "no-handle";
+      const hb = handle.getBoundingClientRect();
+      const db = dst.getBoundingClientRect();
+      const opts = (x, y) => ({ pointerId: 1, bubbles: true, cancelable: true,
+                                clientX: x, clientY: y, button: 0, isPrimary: true });
+      handle.dispatchEvent(new PointerEvent("pointerdown", opts(hb.left + 6, hb.top + 6)));
+      const host = dst.parentElement;
+      // Land near the LEFT edge of the first pane -> should insert before it.
+      host.dispatchEvent(new PointerEvent("pointermove", opts(db.left + db.width * 0.05, db.top + db.height / 2)));
+      host.dispatchEvent(new PointerEvent("pointerup",   opts(db.left + db.width * 0.05, db.top + db.height / 2)));
+      return "dispatched";
+    })()`);
+    await sleep(1200);
+    seq.after = await paneOrder();
     v.click = seq;
     await sleep(4000);
     v.paneCount = await win!.webContents.executeJavaScript(
@@ -160,7 +184,7 @@ async function runSmoke(): Promise<void> {
     );
     // xterm draws to canvas, so the terminal pane contributes no innerText;
     // read the last pane that has any, which is the git pane.
-    const probe = `(()=>{const p=[...document.querySelectorAll('[data-pane]')];return JSON.stringify({panes:p.length,headers:p.map(e=>(e.innerText||"").split("\\n")[0].trim()).filter(Boolean)})})()`;
+    const probe = `(()=>{const p=[...document.querySelectorAll('[data-pane]')];return JSON.stringify({panes:p.length,headers:p.map(e=>(e.innerText||"").split("\\n").slice(0,2).join(" ").trim()).filter(Boolean)})})()`;
     await sleep(2500);
     v.after = (await win!.webContents.executeJavaScript(probe)) as string;
   } catch (e) {

@@ -8,15 +8,32 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { place, resize, type Node, type Rect } from "../../shared/layout.js";
+import {
+  dropEdge, dropPreview, edgeToSplit, movePane, place, resize, swapPanes,
+  type DropEdge, type Node, type Rect,
+} from "../../shared/layout.js";
 
 export interface WorkspaceProps {
   tree: Node;
   onTreeChange: (next: Node) => void;
-  renderPane: (paneId: string, focused: boolean) => React.ReactNode;
+  /** Rendered inside each pane; `dragHandleProps` makes any element draggable. */
+  renderPane: (
+    paneId: string,
+    focused: boolean,
+    dragHandleProps: { onPointerDown: (e: React.PointerEvent) => void },
+  ) => React.ReactNode;
   focusedPaneId?: string;
   onFocusPane: (paneId: string) => void;
   gap?: number;
+}
+
+interface PaneDrag {
+  paneId: string;
+  /** Pointer position, for the floating label. */
+  x: number;
+  y: number;
+  /** Where the drop would land, once the pointer is over another pane. */
+  over?: { paneId: string; edge: DropEdge; rect: Rect };
 }
 
 interface DragState {
@@ -32,6 +49,8 @@ export function Workspace(props: WorkspaceProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [rect, setRect] = useState<Rect>({ x: 0, y: 0, w: 0, h: 0 });
   const dragRef = useRef<DragState | null>(null);
+  const [paneDrag, setPaneDrag] = useState<PaneDrag | null>(null);
+  const paneDragRef = useRef<PaneDrag | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -64,28 +83,82 @@ export function Workspace(props: WorkspaceProps) {
     [props.tree, rect, gap],
   );
 
+  /** Begin dragging a pane. Bound to the pane header via dragHandleProps. */
+  const startPaneDrag = useCallback(
+    (paneId: string) => (e: React.PointerEvent) => {
+      // Left button only; ignore clicks on the header's own buttons.
+      if (e.button !== 0) return;
+      if ((e.target as HTMLElement).closest("button")) return;
+      e.preventDefault();
+      const host = hostRef.current;
+      if (!host) return;
+      const box = host.getBoundingClientRect();
+      const next: PaneDrag = { paneId, x: e.clientX - box.left, y: e.clientY - box.top };
+      paneDragRef.current = next;
+      setPaneDrag(next);
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    },
+    [],
+  );
+
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
-      const drag = dragRef.current;
       const host = hostRef.current;
-      if (!drag || !host) return;
+      if (!host) return;
       const box = host.getBoundingClientRect();
-      const pos = drag.dir === "row" ? e.clientX - box.left : e.clientY - box.top;
+      const px = e.clientX - box.left;
+      const py = e.clientY - box.top;
+
+      // Dragging a pane onto another pane.
+      const pd = paneDragRef.current;
+      if (pd) {
+        const target = panes.find(
+          (p) => px >= p.x && px <= p.x + p.w && py >= p.y && py <= p.y + p.h,
+        );
+        const over =
+          target && target.paneId !== pd.paneId
+            ? { paneId: target.paneId, edge: dropEdge(target, px, py), rect: target }
+            : undefined;
+        const next: PaneDrag = { ...pd, x: px, y: py, over };
+        paneDragRef.current = next;
+        setPaneDrag(next);
+        return;
+      }
+
+      // Dragging a divider.
+      const drag = dragRef.current;
+      if (!drag) return;
+      const pos = drag.dir === "row" ? px : py;
       const usable = Math.max(1, drag.extent - gap);
       props.onTreeChange(resize(props.tree, drag.branchId, (pos - drag.origin) / usable));
     },
-    [gap, props],
+    [gap, props, panes],
   );
 
-  const endDrag = useCallback((e: React.PointerEvent) => {
-    if (!dragRef.current) return;
-    dragRef.current = null;
-    try {
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      // Capture may already be gone.
-    }
-  }, []);
+  const endDrag = useCallback(
+    (e: React.PointerEvent) => {
+      const pd = paneDragRef.current;
+      if (pd) {
+        paneDragRef.current = null;
+        setPaneDrag(null);
+        if (pd.over) {
+          const split = edgeToSplit(pd.over.edge);
+          props.onTreeChange(
+            split
+              ? movePane(props.tree, pd.paneId, pd.over.paneId, split.dir, split.before)
+              : swapPanes(props.tree, pd.paneId, pd.over.paneId),
+          );
+        }
+      }
+      dragRef.current = null;
+      try {
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {
+        // Capture may already be gone.
+      }
+    },
+    [props],
+  );
 
   return (
     <div
@@ -114,10 +187,44 @@ export function Workspace(props: WorkspaceProps) {
               background: "#0d0d11",
             }}
           >
-            {props.renderPane(p.paneId, focused)}
+            {props.renderPane(p.paneId, focused, { onPointerDown: startPaneDrag(p.paneId) })}
           </div>
         );
       })}
+
+      {/* Drop indicator: shows exactly where the pane will land. */}
+      {paneDrag?.over && (() => {
+        const prev = dropPreview(paneDrag.over.rect, paneDrag.over.edge);
+        const swap = paneDrag.over.edge === "center";
+        return (
+          <div
+            style={{
+              position: "absolute", left: prev.x, top: prev.y, width: prev.w, height: prev.h,
+              background: swap ? "rgba(210,153,34,0.16)" : "rgba(47,111,235,0.20)",
+              border: `2px solid ${swap ? "#d29922" : "#2f6feb"}`,
+              borderRadius: 6, pointerEvents: "none", zIndex: 20,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              color: "#e6e6ea", fontFamily: "system-ui", fontSize: 11,
+            }}
+          >
+            {swap ? "swap" : ""}
+          </div>
+        );
+      })()}
+
+      {/* Floating label following the pointer while dragging. */}
+      {paneDrag && (
+        <div
+          style={{
+            position: "absolute", left: paneDrag.x + 12, top: paneDrag.y + 12,
+            padding: "2px 8px", background: "#1e1e26", border: "1px solid #2f6feb",
+            borderRadius: 5, color: "#e6e6ea", fontFamily: "system-ui", fontSize: 11,
+            pointerEvents: "none", zIndex: 30,
+          }}
+        >
+          moving pane
+        </div>
+      )}
 
       {dividers.map((d) => (
         <div

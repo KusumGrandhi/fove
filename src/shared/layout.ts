@@ -188,3 +188,75 @@ export function place(
     dividers: [divider, ...A.dividers, ...B.dividers],
   };
 }
+
+// --- drag & drop -----------------------------------------------------------
+
+/** Which edge of a pane a drop would attach to. */
+export type DropEdge = "left" | "right" | "top" | "bottom" | "center";
+
+/**
+ * Decide the drop edge from a pointer position within a pane's rect.
+ *
+ * The outer `band` fraction of each side is an edge zone; anything nearer the
+ * middle is "center" (swap with the target rather than split it). Whichever
+ * edge the pointer is proportionally closest to wins, so a wide-but-short pane
+ * still gets sensible top/bottom zones.
+ */
+export function dropEdge(
+  rect: Rect,
+  x: number,
+  y: number,
+  band = 0.3,
+): DropEdge {
+  if (rect.w <= 0 || rect.h <= 0) return "center";
+  // Position within the pane, 0..1 on each axis.
+  const px = (x - rect.x) / rect.w;
+  const py = (y - rect.y) / rect.h;
+  if (px < 0 || px > 1 || py < 0 || py > 1) return "center";
+
+  const dist = { left: px, right: 1 - px, top: py, bottom: 1 - py };
+  const [edge, value] = Object.entries(dist).sort((a, b) => a[1] - b[1])[0] as [DropEdge, number];
+  return value < band ? edge : "center";
+}
+
+/** Translate a drop edge into the split arguments movePane expects. */
+export function edgeToSplit(edge: DropEdge): { dir: Dir; before: boolean } | null {
+  switch (edge) {
+    case "left": return { dir: "row", before: true };
+    case "right": return { dir: "row", before: false };
+    case "top": return { dir: "column", before: true };
+    case "bottom": return { dir: "column", before: false };
+    case "center": return null;
+  }
+}
+
+/**
+ * Swap two panes in place, leaving the tree shape untouched.
+ * This is what a "center" drop does.
+ */
+export function swapPanes(root: Node, a: string, b: string): Node {
+  if (a === b) return root;
+  const walk = (n: Node): Node => {
+    if (n.kind === "leaf") {
+      if (n.paneId === a) return { ...n, paneId: b };
+      if (n.paneId === b) return { ...n, paneId: a };
+      return n;
+    }
+    const A = walk(n.a);
+    const B = walk(n.b);
+    return A === n.a && B === n.b ? n : { ...n, a: A, b: B };
+  };
+  return walk(root);
+}
+
+/** Preview rect for the drop indicator overlay. */
+export function dropPreview(rect: Rect, edge: DropEdge): Rect {
+  const half = { ...rect };
+  switch (edge) {
+    case "left": return { ...half, w: rect.w / 2 };
+    case "right": return { ...half, x: rect.x + rect.w / 2, w: rect.w / 2 };
+    case "top": return { ...half, h: rect.h / 2 };
+    case "bottom": return { ...half, y: rect.y + rect.h / 2, h: rect.h / 2 };
+    case "center": return rect;
+  }
+}

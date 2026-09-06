@@ -1,7 +1,7 @@
 import { describe, expect, test, beforeEach } from "vitest";
 import {
   leaf, split, closePane, resize, movePane, place, paneIds, isValid,
-  clampRatio, MIN_RATIO, __resetIds, type Node,
+  clampRatio, MIN_RATIO, __resetIds, dropEdge, edgeToSplit, dropPreview, swapPanes, type Node,
 } from "../src/shared/layout.js";
 
 beforeEach(() => __resetIds());
@@ -191,5 +191,79 @@ describe("serialization", () => {
     expect(back).toEqual(t);
     expect(isValid(back)).toBe(true);
     expect(place(back, R)).toEqual(place(t, R));
+  });
+});
+
+describe("drop zones", () => {
+  const R2 = { x: 0, y: 0, w: 100, h: 100 };
+
+  test("edges are detected near each side", () => {
+    expect(dropEdge(R2, 5, 50)).toBe("left");
+    expect(dropEdge(R2, 95, 50)).toBe("right");
+    expect(dropEdge(R2, 50, 5)).toBe("top");
+    expect(dropEdge(R2, 50, 95)).toBe("bottom");
+  });
+  test("the middle is center, not an edge", () => {
+    expect(dropEdge(R2, 50, 50)).toBe("center");
+    expect(dropEdge(R2, 40, 60)).toBe("center");
+  });
+  test("the nearest edge wins in a corner", () => {
+    // Slightly nearer the left than the top.
+    expect(dropEdge(R2, 4, 8)).toBe("left");
+    expect(dropEdge(R2, 8, 4)).toBe("top");
+  });
+  test("works on non-square panes", () => {
+    const wide = { x: 0, y: 0, w: 400, h: 50 };
+    expect(dropEdge(wide, 5, 25)).toBe("left");
+    expect(dropEdge(wide, 200, 3)).toBe("top");
+    expect(dropEdge(wide, 200, 25)).toBe("center");
+  });
+  test("offset rects are handled in absolute coordinates", () => {
+    const off = { x: 500, y: 300, w: 100, h: 100 };
+    expect(dropEdge(off, 505, 350)).toBe("left");
+    expect(dropEdge(off, 550, 350)).toBe("center");
+  });
+  test("out-of-bounds and degenerate rects fall back to center", () => {
+    expect(dropEdge(R2, -10, 50)).toBe("center");
+    expect(dropEdge({ x: 0, y: 0, w: 0, h: 0 }, 0, 0)).toBe("center");
+  });
+
+  test("edges map to split arguments; center does not split", () => {
+    expect(edgeToSplit("left")).toEqual({ dir: "row", before: true });
+    expect(edgeToSplit("right")).toEqual({ dir: "row", before: false });
+    expect(edgeToSplit("top")).toEqual({ dir: "column", before: true });
+    expect(edgeToSplit("bottom")).toEqual({ dir: "column", before: false });
+    expect(edgeToSplit("center")).toBeNull();
+  });
+
+  test("preview covers the half a drop would occupy", () => {
+    expect(dropPreview(R2, "right")).toEqual({ x: 50, y: 0, w: 50, h: 100 });
+    expect(dropPreview(R2, "bottom")).toEqual({ x: 0, y: 50, w: 100, h: 50 });
+    expect(dropPreview(R2, "center")).toEqual(R2);
+  });
+});
+
+describe("swapPanes", () => {
+  test("exchanges two panes without changing the tree shape", () => {
+    let t: Node = leaf("a");
+    t = split(t, "a", "b", "row");
+    t = split(t, "b", "c", "column");
+    const before = JSON.stringify(t, (k, v) => (k === "paneId" ? "?" : v));
+    const after = swapPanes(t, "a", "c");
+    expect(JSON.stringify(after, (k, v) => (k === "paneId" ? "?" : v))).toBe(before);
+    expect(paneIds(after)).toEqual(["c", "b", "a"].slice(0, paneIds(after).length));
+    expect(isValid(after)).toBe(true);
+  });
+  test("swapping a pane with itself is a no-op", () => {
+    const t = split(leaf("a"), "a", "b", "row");
+    expect(swapPanes(t, "a", "a")).toBe(t);
+  });
+  test("never loses or duplicates a pane", () => {
+    let t: Node = leaf("a");
+    t = split(t, "a", "b", "row");
+    t = split(t, "b", "c", "column");
+    const after = swapPanes(t, "a", "b");
+    expect(paneIds(after).sort()).toEqual(["a", "b", "c"]);
+    expect(isValid(after)).toBe(true);
   });
 });
