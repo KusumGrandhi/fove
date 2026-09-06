@@ -55,6 +55,9 @@ const CH = {
   teamSend: "teams:send",
   teamInterrupt: "teams:interrupt",
   bgSessions: "sessions:background",
+  providers: "models:providers",
+  agentsList: "config:agents",
+  mcpList: "config:mcp",
   ideOpenFile: "ide:openFile",
   ideOpenDiff: "ide:openDiff",
   ideDiffResult: "ide:diffResult",
@@ -70,6 +73,8 @@ interface SpawnRequest {
   cwd?: string;
   cols: number;
   rows: number;
+  /** Extra environment, e.g. a third-party provider's base URL. */
+  env?: Record<string, string>;
 }
 
 const api = {
@@ -147,6 +152,12 @@ const api = {
   gitBlame: (cwd: string, path: string): Promise<unknown[]> =>
     ipcRenderer.invoke(CH.gitBlame, cwd, path),
   gitBranches: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.gitBranches, cwd),
+
+  agentsList: (cwd?: string): Promise<unknown[]> => ipcRenderer.invoke(CH.agentsList, cwd),
+  mcpList: (cwd?: string): Promise<unknown[]> => ipcRenderer.invoke(CH.mcpList, cwd),
+
+  /** Providers plus Anthropic's verbatim unsupported-routing notice. */
+  providers: (): Promise<unknown> => ipcRenderer.invoke(CH.providers),
 
   bgSessions: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.bgSessions, cwd),
 

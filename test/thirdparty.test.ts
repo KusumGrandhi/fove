@@ -54,3 +54,39 @@ describe("providers", () => {
     expect(UNSUPPORTED_NOTICE).toContain("doesn't endorse, maintain, or audit");
   });
 });
+
+describe("OpenRouter", () => {
+  test("ships as a builtin with an Anthropic-shaped endpoint", async () => {
+    const { BUILTIN_PROVIDERS } = await import("../src/data/models/thirdParty.js");
+    const or = BUILTIN_PROVIDERS.find((p) => p.id === "openrouter");
+    expect(or).toBeDefined();
+    expect(or!.thirdParty).toBe(true);
+    expect(or!.authTokenEnv).toBe("OPENROUTER_API_KEY");
+    expect(or!.models.length).toBeGreaterThan(0);
+    // The warning about caching and tool-call divergence must travel with it.
+    expect(or!.notes ?? "").toMatch(/caching/i);
+  });
+
+  test("config lives under fove, never in ~/.claude", async () => {
+    const { PROVIDERS_PATH } = await import("../src/data/models/thirdParty.js");
+    expect(PROVIDERS_PATH).toContain("/.config/fove/");
+    expect(PROVIDERS_PATH).not.toContain(".claude");
+  });
+
+  test("a provider is unusable until its key is in the environment", async () => {
+    const { BUILTIN_PROVIDERS, tokenFor } = await import("../src/data/models/thirdParty.js");
+    const or = BUILTIN_PROVIDERS.find((p) => p.id === "openrouter")!;
+    const had = process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    expect(tokenFor(or)).toBeUndefined();
+    process.env.OPENROUTER_API_KEY = "sk-test";
+    expect(tokenFor(or)).toBe("sk-test");
+    if (had === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = had;
+  });
+
+  test("Anthropic itself is not marked third-party", async () => {
+    const { BUILTIN_PROVIDERS } = await import("../src/data/models/thirdParty.js");
+    expect(BUILTIN_PROVIDERS.find((p) => p.id === "anthropic")!.thirdParty).toBe(false);
+  });
+});

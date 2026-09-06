@@ -200,6 +200,23 @@ entry cannot break the plain CLI.
 
 ---
 
+## Status
+
+| Item | State |
+|---|---|
+| §0 launch blocker | **done** — was a sandboxed-shell artifact, not an app defect |
+| §1 icon | **done** — generated mark, icns + favicon |
+| §2 git write ops | **done** — stage/commit/stash/push/blame/graph |
+| §3 stats panel | **done** — output tokens now counted for CLI transcripts |
+| §4 MCP + agents | **done** — config pane lists both; debugger/browser deferred to 0.7+ |
+| §5 themes / animation | **done** — 5 themes, live repaint, reduced-motion respected |
+| §6 OpenRouter | **done** — provider entry, picker UI, verbatim disclaimer |
+
+Deferred as planned: debugger and browser testing to 0.7+, skills UI to 0.9.
+
+Also still open from v0.1: per-hunk staging has its mechanism (`applyPatch`)
+but no UI; drag-and-drop moves panes within a tab but not between tabs.
+
 ## Suggested order
 
 1. ~~**Launch blocker** (§0)~~ — resolved; was a sandboxed-shell artifact, not

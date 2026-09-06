@@ -119,11 +119,13 @@ const S: Record<string, React.CSSProperties> = {
   backdrop: {
     position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)",
     display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60,
+    animation: "fove-fade-in 120ms ease-out",
   },
   panel: {
     width: "min(1200px, 92%)", height: "min(760px, 88%)", display: "flex",
     flexDirection: "column", background: "#0d0d11", border: `1px solid ${C.accent}`,
     borderRadius: 8, overflow: "hidden", boxShadow: "0 18px 48px rgba(0,0,0,0.5)",
+    animation: "fove-rise 160ms ease-out",
   },
   head: {
     display: "flex", alignItems: "center", gap: 10, padding: "7px 10px",

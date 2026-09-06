@@ -10,6 +10,39 @@
       ::-webkit-scrollbar-thumb { background: #2a2a33; border-radius: 4px; }
     </style>
       <link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAIKADAAQAAAABAAAAIAAAAACshmLzAAADU0lEQVRYCe2XvW/TQBTA353jJI7rtlRQBvqliFQsFWwsVQVsDB37DyARulRdWBgqRWJgYulUIrEjdUJC6hqyISGRDmEooaAW6AcIqjTxR2KfeZfkjNPYCYoUlmLpdOd779373d3z0zPAeX9IrwPIZDJ0a+vNkGUZtJeuXy5JEXdxcf4U7Zl//uw4FGB2du6aruv3HMe+4zjsMhpKZ417vDNK6ZEkyTlF0Z6XSu/eB+kHAkxOppYto/LEYfao67qddjhHKOeRwHUC5D4LQghQSSorirK29+XDuk/UGHYATE2lHpimuUG1GSBSHJUCHBAKTvUImH0M8QkVoGMVnxuUuTUX6gcWxGPK6t5eO0SbaTJ5fbZSPnpLR1La+N0XCBALBCA0CvrnPDB4BBMrKXDrAZA+Bn5KH9eKUPtkVEfGLt4slbaLQtwWWJZVSTvM0fjOSYQ753xBDWdlFWgiipBtexDrtvVExmuIUWAOU02zsuwXegBLS0sSD7jmneOOGnfPdxbSuLzR/MuFjFtL8LVtu347nU7LQtMD2N39NcRYI9qFbAC9y5kvFQqFYbG4B4C7F2ctZAPqXVKv1z2/3mBA3nou+x8g0vOMuigQ2vy8uqg0RV2iq28AEqFQLp7A8auvzS81jAJTMTMdsL4ZgTmjbwDA6CGHBCIv+SA8GXGJg5mQ6MgZEHF9A7gug9GxC3BlZgYwf4Tt35s/qf6EWvnEexeDvgH4AjyzMeb8BUD4CQUcimD7N/1/AO8EeA3Hr3XwB09cWZa9qPUANG2+Sgg9HiQA/1qx/Zienj4VfjyAXC5jRyJSjtdwqNZqQi2g9/QCZKFTFPCkX29ubtaEigfAJ1RVfSZRqeI6Fl6GjRwoDmxYjNoGVjj11joCuLPnG2p+rgydUyMaTWwI57znFm0PFqUrpmmt05GrQCPxhnGbAr7gVYFdPQRXP4CEqp0Vd7zzRIX/FRCLJR7u7+889St0AHAhQqya+uljLFK0ZonmN2mNidQozbtlQX5LHBb/D6rxeCLTdE7aAj0QgLtIJufmajX9PtZwtzDhjQdn8gAwb4owBPiOd55XVSW7s1Pc9kS+QSiA0OEFZD5fGFaUP2WUkHXrDUNmCws3ytlsVgRKN/VzLPsN3PUzZhH4k3wAAAAASUVORK5CYII=" />
+      <style>
+      /* Theme tokens are set on :root at runtime by applyTheme(). */
+      html, body { background: var(--fove-bg, #0b0b0f); }
+
+      /* Panes settle into place rather than appearing abruptly. Transforms and
+         opacity only, so nothing triggers layout while a terminal is drawing. */
+      [data-pane] {
+        animation: fove-pane-in 140ms ease-out;
+        transition: outline-color 120ms ease-out;
+      }
+      @keyframes fove-pane-in {
+        from { opacity: 0; transform: scale(0.985); }
+        to   { opacity: 1; transform: scale(1); }
+      }
+
+      button { transition: background 100ms ease-out, border-color 100ms ease-out, color 100ms ease-out; }
+
+      /* Overlays -- the diff and the model picker. */
+      @keyframes fove-fade-in { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes fove-rise {
+        from { opacity: 0; transform: translateY(6px) scale(0.99); }
+        to   { opacity: 1; transform: translateY(0) scale(1); }
+      }
+
+      /* Someone who has asked the OS for less motion gets none of it. */
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

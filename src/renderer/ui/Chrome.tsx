@@ -7,19 +7,17 @@
 
 import type { CSSProperties, ReactNode } from "react";
 
-export const C = {
-  bg: "#0b0b0f",
-  chrome: "#16161c",
-  chromeHi: "#1e1e26",
-  panel: "#101014",
-  line: "#26262f",
-  fg: "#e6e6ea",
-  dim: "#9a9aa3",
-  faint: "#5a5a63",
-  accent: "#2f6feb",
-  green: "#3fb950",
-  red: "#e5534b",
-};
+/**
+ * The app's colours, as CSS variable references.
+ *
+ * Every pane imports this, so routing the values through custom properties is
+ * what lets a theme change repaint the whole app without remounting a single
+ * pane -- and remounting would kill the PTY inside a running `claude` session.
+ * The literal values live in themes.ts.
+ */
+import { TOKENS } from "./themes.js";
+
+export const C = TOKENS;
 
 /** A toolbar button that also advertises its shortcut. */
 export function ToolButton(props: {

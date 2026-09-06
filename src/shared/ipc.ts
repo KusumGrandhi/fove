@@ -8,6 +8,8 @@ export interface SpawnRequest {
   cwd?: string;
   cols: number;
   rows: number;
+  /** Extra environment for this pane's process. */
+  env?: Record<string, string>;
 }
 
 export const CH = {
@@ -58,6 +60,9 @@ export const CH = {
   teamSend: "teams:send",
   teamInterrupt: "teams:interrupt",
   bgSessions: "sessions:background",
+  providers: "models:providers",
+  agentsList: "config:agents",
+  mcpList: "config:mcp",
   ideOpenFile: "ide:openFile",
   ideOpenDiff: "ide:openDiff",
   ideDiffResult: "ide:diffResult",

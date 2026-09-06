@@ -12,17 +12,20 @@ import { TerminalPane } from "./panes/Terminal.js";
 import { GitStatusPane } from "./panes/GitStatus.js";
 import { EditorPane } from "./panes/Editor.js";
 import { AgentsPane } from "./panes/Agents.js";
+import { ConfigPane } from "./panes/Config.js";
 import { DiffView, type DiffRequest } from "./panes/DiffView.js";
+import { ModelPicker, type Provider } from "./ui/ModelPicker.js";
 import { AgentsWidget, SkillsWidget, TokensWidget, useSnapshot } from "./ui/widgets.js";
 import { TeammateBar, TeammateView, useTeammates } from "./ui/Teammates.js";
 import { C, Divider, ToolButton } from "./ui/Chrome.js";
+import { THEMES, DEFAULT_THEME, applyTheme } from "./ui/themes.js";
 import { close as closeTab, insert as insertTab, setPinned } from "../shared/tabs.js";
 import {
   closePane, closePaneChecked, isValid, leaf, newId, paneIds, prunePins, setPanePinned,
   split, type Dir, type Node, type Pins,
 } from "../shared/layout.js";
 
-type PaneKind = "shell" | "claude" | "git" | "editor" | "agents";
+type PaneKind = "shell" | "claude" | "git" | "editor" | "agents" | "config";
 
 interface PaneSpec {
   id: string;
@@ -31,6 +34,9 @@ interface PaneSpec {
   cwd?: string;
   /** For editor panes: the file to show, e.g. one Claude asked us to open. */
   openPath?: string;
+  /** For claude panes routed at a non-default backend. */
+  providerEnv?: Record<string, string>;
+  providerLabel?: string;
 }
 
 /**
@@ -253,6 +259,8 @@ export function App() {
       else if (e.key === "g") { e.preventDefault(); doSplit("row", "git"); }
       else if (e.key === "e") { e.preventDefault(); doSplit("row", "editor"); }
       else if (e.key === "r") { e.preventDefault(); doSplit("row", "agents"); }
+      else if (e.key === "m") { e.preventDefault(); setPickerOpen(true); }
+      else if (e.key === "k") { e.preventDefault(); doSplit("row", "config"); }
       else if (e.key === "p" && e.shiftKey) { e.preventDefault(); togglePin(activeTabId); }
       else if (e.key === "p") { e.preventDefault(); if (active) togglePanePin(active.focusedPaneId); }
       else if (e.key === "Enter") { e.preventDefault(); doSplit("row", "claude"); }
@@ -276,6 +284,19 @@ export function App() {
    * Diffs Claude is blocked on, oldest first. A turn can produce several, and
    * each must get its own verdict, so they queue rather than overwrite.
    */
+  /**
+   * The active theme. Stored per-machine in localStorage rather than in the
+   * layout file: it is a display preference, not part of a workspace.
+   */
+  const [themeId, setThemeId] = useState<string>(
+    () => localStorage.getItem("fove.theme") ?? DEFAULT_THEME,
+  );
+  useEffect(() => {
+    applyTheme(themeId);
+    localStorage.setItem("fove.theme", themeId);
+  }, [themeId]);
+
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [diffs, setDiffs] = useState<DiffRequest[]>([]);
   useEffect(() => {
     const off = window.th.onIdeOpenDiff((raw) => {
@@ -284,6 +305,39 @@ export function App() {
     });
     return off;
   }, []);
+
+  /**
+   * Open a claude pane against a chosen backend.
+   *
+   * ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN are read when the client is
+   * constructed, so this has to be a *new* pane -- an already-running session
+   * cannot be repointed.
+   */
+  const launchProvider = useCallback(
+    (p: Provider, model: string) => {
+      if (!active) return;
+      const env: Record<string, string> = {};
+      if (p.thirdParty) {
+        env.ANTHROPIC_BASE_URL = p.baseUrl;
+        // The key itself never reaches the renderer: the main process resolves
+        // it from the named variable when it spawns the PTY.
+        env.FOVE_PROVIDER_TOKEN_ENV = p.authTokenEnv;
+        if (model) env.ANTHROPIC_MODEL = model;
+      }
+      const pane: PaneSpec = {
+        ...makePane("claude", active.cwd),
+        providerEnv: env,
+        providerLabel: p.thirdParty ? `${p.label}${model ? ` · ${model}` : ""}` : undefined,
+      };
+      updateTab(active.id, (t) => ({
+        ...t,
+        tree: split(t.tree, t.focusedPaneId, pane.id, "row"),
+        panes: { ...t.panes, [pane.id]: pane },
+        focusedPaneId: pane.id,
+      }));
+    },
+    [active, updateTab],
+  );
 
   const answerDiff = useCallback((id: string, verdict: "saved" | "rejected") => {
     window.th.ideDiffResult(id, verdict);
@@ -390,6 +444,16 @@ export function App() {
         <ToolButton label="Git" hint="⌘G" icon="⎇" onClick={() => doSplit("row", "git")} />
         <ToolButton label="Editor" hint="⌘E" icon="◧" onClick={() => doSplit("row", "editor")} />
         <ToolButton label="Agents" hint="⌘R" icon="◉" onClick={() => doSplit("row", "agents")} />
+        <ToolButton label="Model" hint="⌘M" icon="◈" onClick={() => setPickerOpen(true)} />
+        <ToolButton label="Config" hint="⌘K" icon="⚙" onClick={() => doSplit("row", "config")} />
+        <ToolButton
+          label={THEMES.find((t) => t.id === themeId)?.label ?? "Theme"}
+          icon="◐"
+          onClick={() => {
+            const i = THEMES.findIndex((t) => t.id === themeId);
+            setThemeId(THEMES[(i + 1) % THEMES.length]!.id);
+          }}
+        />
         <Divider />
         <ToolButton
           label={active && panePins.has(active.focusedPaneId) ? "Unpin pane" : "Pin pane"}
@@ -437,6 +501,14 @@ export function App() {
         <TeammateView socket={team.socket} mate={openMate} onClose={() => setOpenMateId(null)} />
       )}
 
+      {pickerOpen && active && (
+        <ModelPicker
+          cwd={active.cwd}
+          onClose={() => setPickerOpen(false)}
+          onLaunch={launchProvider}
+        />
+      )}
+
       {/* A diff Claude is blocked on. One at a time; the rest wait behind it. */}
       {diffs[0] && <DiffView req={diffs[0]} onVerdict={answerDiff} />}
 
@@ -466,9 +538,10 @@ export function App() {
                   >
                     <span style={{ ...S.gripDots, opacity: isPin ? 0.25 : 1 }}>⠿</span>
                     <span style={{ color: focused ? C.fg : C.faint }}>
-                      {spec.kind === "claude" ? "✳ claude"
+                      {spec.kind === "claude" ? (spec.providerLabel ? `✳ ${spec.providerLabel}` : "✳ claude")
                         : spec.kind === "git" ? "⎇ git"
                         : spec.kind === "editor" ? "◧ editor"
+                        : spec.kind === "config" ? "⚙ config"
                         : spec.kind === "agents" ? "◉ agents"
                         : "❯ shell"}
                     </span>
@@ -508,6 +581,8 @@ export function App() {
                       />
                     ) : spec.kind === "agents" ? (
                       <AgentsPane cwd={spec.cwd ?? cwdOf(active)} />
+                    ) : spec.kind === "config" ? (
+                      <ConfigPane cwd={spec.cwd ?? cwdOf(active)} />
                     ) : (
                       <TerminalPane
                         paneId={paneId}
@@ -515,6 +590,7 @@ export function App() {
                         cwd={spec.cwd}
                         cmd={spec.kind === "claude" ? "claude" : undefined}
                         args={spec.kind === "claude" ? [] : undefined}
+                        env={spec.providerEnv}
                       />
                     )}
                   </div>

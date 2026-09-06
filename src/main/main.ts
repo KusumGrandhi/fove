@@ -120,7 +120,16 @@ ipcMain.handle(CH.ptySpawn, (_e, req: SpawnRequest) => {
   const fresh = !ptys.has(req.paneId);
   // Every pane inherits the IDE env, so a `claude` started by hand in a shell
   // pane finds this app too -- not just panes the app spawns as "claude".
-  ptys.spawn({ ...req, env: ide.env() });
+  // A pane routed at a third-party provider names the env var holding its key;
+  // the key itself is resolved here and never crosses into the renderer.
+  const paneEnv = { ...ide.env(), ...(req.env ?? {}) };
+  const tokenVar = paneEnv.FOVE_PROVIDER_TOKEN_ENV;
+  if (tokenVar) {
+    delete paneEnv.FOVE_PROVIDER_TOKEN_ENV;
+    const token = process.env[tokenVar];
+    if (token) paneEnv.ANTHROPIC_AUTH_TOKEN = token;
+  }
+  ptys.spawn({ ...req, env: paneEnv });
   // Replay history so a remounted pane keeps its scrollback.
   return { fresh, scrollback: fresh ? "" : ptys.scrollback(req.paneId) };
 });
@@ -217,6 +226,26 @@ ipcMain.handle(CH.gitStashList, (_e, cwd: string) => gitw.stashList(cwd));
 ipcMain.handle(CH.gitCommits, (_e, cwd: string, limit?: number) => gitw.log(cwd, limit ?? 200));
 ipcMain.handle(CH.gitBlame, (_e, cwd: string, path: string) => gitw.blame(cwd, path));
 ipcMain.handle(CH.gitBranches, (_e, cwd: string) => gitw.branches(cwd));
+
+ipcMain.handle(CH.agentsList, async (_e, cwd?: string) => {
+  const { listAgents } = await import("../data/config/agents.js");
+  return listAgents(cwd);
+});
+ipcMain.handle(CH.mcpList, async (_e, cwd?: string) => {
+  const { listMcpServers } = await import("../data/config/agents.js");
+  return listMcpServers(cwd);
+});
+
+ipcMain.handle(CH.providers, async () => {
+  const { loadProviders, tokenFor, UNSUPPORTED_NOTICE } = await import("../data/models/thirdParty.js");
+  const providers = await loadProviders();
+  return {
+    // `usable` is resolved here because the renderer cannot read process.env,
+    // and must never be handed the key itself.
+    providers: providers.map((p) => ({ ...p, usable: !p.thirdParty || !!tokenFor(p) })),
+    notice: UNSUPPORTED_NOTICE,
+  };
+});
 
 ipcMain.handle(CH.bgSessions, (_e, cwd: string) => backgroundSessions(cwd));
 

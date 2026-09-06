@@ -21,7 +21,14 @@ import { homedir } from "node:os";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-export const PROVIDERS_PATH = join(homedir(), ".config", "cc-wrapper", "providers.json");
+/**
+ * Provider config lives in fove's own directory, never in ~/.claude.json or
+ * ~/.claude/settings.json, so a bad entry here cannot break the plain CLI.
+ */
+export const PROVIDERS_PATH = join(homedir(), ".config", "fove", "providers.json");
+
+/** Where earlier builds kept it; read once so existing setups keep working. */
+export const LEGACY_PROVIDERS_PATH = join(homedir(), ".config", "cc-wrapper", "providers.json");
 
 export const UNSUPPORTED_NOTICE =
   "Anthropic doesn't endorse, maintain, or audit third-party gateway products, " +
@@ -73,18 +80,44 @@ export const BUILTIN_PROVIDERS: Provider[] = [
     models: ["deepseek-reasoner"],
     thirdParty: true,
   },
+  {
+    // OpenRouter fronts many vendors behind one key, which is what makes it
+    // worth having: one entry reaches dozens of models. Its Anthropic-shaped
+    // endpoint is what Claude Code can speak.
+    id: "openrouter",
+    label: "OpenRouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    authTokenEnv: "OPENROUTER_API_KEY",
+    models: [
+      "anthropic/claude-sonnet-4.5",
+      "openai/gpt-5",
+      "google/gemini-2.5-pro",
+      "deepseek/deepseek-r1",
+      "moonshotai/kimi-k2",
+      "qwen/qwen3-235b-a22b",
+    ],
+    thirdParty: true,
+    notes:
+      "Routes to many vendors behind one key. Prompt caching usually does not " +
+      "apply, so cost and latency can get worse; tool-call formatting varies by " +
+      "model, which shows up as the agentic loop stalling or looping.",
+  },
 ];
 
 export async function loadProviders(path = PROVIDERS_PATH): Promise<Provider[]> {
-  try {
-    const raw = JSON.parse(await readFile(path, "utf8"));
-    if (Array.isArray(raw)) {
-      const extra = raw.filter((p): p is Provider => !!p && typeof p.id === "string");
-      const ids = new Set(extra.map((p) => p.id));
-      return [...BUILTIN_PROVIDERS.filter((p) => !ids.has(p.id)), ...extra];
+  // The legacy location is read only when the current one is absent, so an
+  // existing setup keeps working without being silently migrated.
+  for (const candidate of [path, LEGACY_PROVIDERS_PATH]) {
+    try {
+      const raw = JSON.parse(await readFile(candidate, "utf8"));
+      if (Array.isArray(raw)) {
+        const extra = raw.filter((p): p is Provider => !!p && typeof p.id === "string");
+        const ids = new Set(extra.map((p) => p.id));
+        return [...BUILTIN_PROVIDERS.filter((p) => !ids.has(p.id)), ...extra];
+      }
+    } catch {
+      // Missing or malformed: try the next candidate, then fall back.
     }
-  } catch {
-    // No user file: builtins only.
   }
   return BUILTIN_PROVIDERS;
 }

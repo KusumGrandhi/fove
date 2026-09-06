@@ -16,17 +16,29 @@ export interface TerminalPaneProps {
   cmd?: string;
   args?: string[];
   cwd?: string;
+  /** Extra environment, e.g. a third-party provider's base URL. */
+  env?: Record<string, string>;
   focused: boolean;
   onExit?: (code: number) => void;
   onTitle?: (title: string) => void;
 }
 
-const THEME = {
-  background: "#0d0d11",
-  foreground: "#d8d8dc",
-  cursor: "#00a0ff",
-  selectionBackground: "#264f78",
-};
+/**
+ * xterm paints to a canvas and cannot read CSS variables, so it needs the
+ * theme's literal values. `activeTheme()` reads whichever theme is applied
+ * rather than hard-coding one.
+ */
+function termTheme(): { background: string; foreground: string; cursor: string; selectionBackground: string } {
+  const css = getComputedStyle(document.documentElement);
+  const get = (name: string, fallback: string) =>
+    css.getPropertyValue(`--fove-${name}`).trim() || fallback;
+  return {
+    background: get("panel", "#0d0d11"),
+    foreground: get("fg", "#d8d8dc"),
+    cursor: get("accent", "#00a0ff"),
+    selectionBackground: "#264f78",
+  };
+}
 
 export function TerminalPane(props: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -44,7 +56,7 @@ export function TerminalPane(props: TerminalPaneProps) {
       cursorBlink: true,
       allowProposedApi: true,
       scrollback: 10_000,
-      theme: THEME,
+      theme: termTheme(),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -77,6 +89,7 @@ export function TerminalPane(props: TerminalPaneProps) {
         cmd: props.cmd,
         args: props.args,
         cwd: props.cwd,
+        env: props.env,
         cols: term.cols,
         rows: term.rows,
       });
