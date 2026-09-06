@@ -32,4 +32,10 @@ export const CH = {
   fileWrite: "file:write",
   fileList: "file:list",
   filePick: "dialog:file",
+  claudeSnapshot: "claude:snapshot",
+  claudeSessions: "claude:sessions",
+  skillsList: "skills:list",
+  skillsToggle: "skills:toggle",
+  memoryList: "memory:list",
+  appCwd: "app:cwd",
 } as const;

@@ -29,6 +29,12 @@ const CH = {
   fileWrite: "file:write",
   fileList: "file:list",
   filePick: "dialog:file",
+  claudeSnapshot: "claude:snapshot",
+  claudeSessions: "claude:sessions",
+  skillsList: "skills:list",
+  skillsToggle: "skills:toggle",
+  memoryList: "memory:list",
+  appCwd: "app:cwd",
 } as const;
 
 interface SpawnRequest {
@@ -78,6 +84,16 @@ const api = {
     ipcRenderer.invoke(CH.fileWrite, path, content, mtimeMs),
   fileList: (dir: string): Promise<unknown[]> => ipcRenderer.invoke(CH.fileList, dir),
   filePick: (): Promise<string | null> => ipcRenderer.invoke(CH.filePick),
+
+  claudeSnapshot: (cwd: string): Promise<unknown> =>
+    ipcRenderer.invoke(CH.claudeSnapshot, cwd),
+  claudeSessions: (): Promise<unknown[]> => ipcRenderer.invoke(CH.claudeSessions),
+  skillsList: (): Promise<unknown> => ipcRenderer.invoke(CH.skillsList),
+  skillsToggle: (name: string, current?: string): Promise<boolean> =>
+    ipcRenderer.invoke(CH.skillsToggle, name, current),
+  memoryList: (): Promise<unknown[]> => ipcRenderer.invoke(CH.memoryList),
+
+  appCwd: (): Promise<string> => ipcRenderer.invoke(CH.appCwd),
 
   loadLayout: (): Promise<unknown> => ipcRenderer.invoke(CH.layoutLoad),
   saveLayout: (state: unknown): void => ipcRenderer.send(CH.layoutSave, state),

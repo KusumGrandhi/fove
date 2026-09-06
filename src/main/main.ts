@@ -12,6 +12,12 @@ import { readFileSync } from "node:fs";
 import { PtyService } from "./pty.js";
 import { GitService } from "./git.js";
 import { FileService } from "./files.js";
+import { ClaudeSessionService, toWire } from "./claudeSession.js";
+import { readClaudeJson } from "../data/config/claudeJson.js";
+import { listSkills, sortSkills, budget, orphanUsage } from "../data/config/skills.js";
+import { listMemories } from "../data/config/memory.js";
+import { readSettings, setSkillOverride, nextOverride } from "../data/config/settingsFile.js";
+import { listSessions } from "../data/transcript.js";
 import { openInEditor, revealInFinder } from "./openExternal.js";
 import { loadState, saveState } from "./store.js";
 import { CH, type SpawnRequest } from "../shared/ipc.js";
@@ -90,6 +96,7 @@ ipcMain.on(CH.ptyKill, (_e, paneId: string) => ptys.kill(paneId));
 
 const gitSvc = new GitService();
 const fileSvc = new FileService();
+const claudeSvc = new ClaudeSessionService();
 
 ipcMain.handle(CH.gitRoot, (_e, cwd: string) => gitSvc.root(cwd));
 ipcMain.handle(CH.gitStatus, (_e, cwd: string) => gitSvc.status(cwd));
@@ -119,6 +126,33 @@ ipcMain.handle(CH.filePick, async () => {
   const r = await dialog.showOpenDialog(win!, { properties: ["openFile"] });
   return r.canceled ? null : r.filePaths[0];
 });
+
+ipcMain.handle(CH.claudeSnapshot, async (_e, cwd: string) => {
+  const snap = await claudeSvc.snapshot(cwd);
+  return snap ? { ...snap, agents: toWire(snap.agents) } : null;
+});
+ipcMain.handle(CH.claudeSessions, () => listSessions());
+
+ipcMain.handle(CH.skillsList, async () => {
+  const [cj, settings] = await Promise.all([readClaudeJson(), readSettings()]);
+  const skills = await listSkills({
+    usage: cj.skillUsage,
+    overrides: (settings.skillOverrides ?? {}) as Record<string, string>,
+  });
+  return {
+    skills: sortSkills(skills, "costPerUse"),
+    budget: budget(skills),
+    orphans: orphanUsage(skills, cj.skillUsage),
+    mcp: cj.mcpServers,
+  };
+});
+ipcMain.handle(CH.skillsToggle, async (_e, name: string, current?: string) => {
+  await setSkillOverride(name, nextOverride(current as never));
+  return true;
+});
+ipcMain.handle(CH.memoryList, () => listMemories());
+
+ipcMain.handle(CH.appCwd, () => process.cwd());
 
 ipcMain.handle(CH.layoutLoad, () => loadState<unknown>(null));
 ipcMain.on(CH.layoutSave, (_e, state: unknown) => saveState(state));
@@ -152,40 +186,21 @@ async function runSmoke(): Promise<void> {
     const js = (code: string) => win!.webContents.executeJavaScript(code);
     const clickBtn = (re: string) =>
       js(`[...document.querySelectorAll("button")].find(b=>${re}.test(b.innerText))?.click(), 1`);
-
     const seq: Record<string, unknown> = {};
-    // Open an editor pane via the toolbar.
-    await clickBtn("/\\bEditor\\b/"); await sleep(3000);
+
+    // --- stats rail widgets ---
+    await sleep(3500);
+    seq.railTokens = await js(`!!document.body.innerText.match(/TOKENS/)`);
+    seq.railAgents = await js(`!!document.body.innerText.match(/AGENTS/)`);
+    seq.railSkills = await js(`!!document.body.innerText.match(/SKILLS/)`);
+    seq.railHasNumbers = await js(`!!document.body.innerText.match(/\\d+(\\.\\d+)?[kM]\\b/)`);
+
+    // --- agents pane ---
+    await clickBtn("/\\bAgents\\b/"); await sleep(3000);
     seq.panes = await js(`document.querySelectorAll("[data-pane]").length`);
-    seq.treeFiles = await js(`document.body.innerText.split("\\n").filter(l=>/\\.ts$|\\.json$|package/.test(l)).length`);
-
-    // Click a real file in the tree, then confirm Monaco mounted with content.
-    seq.opened = await js(`(() => {
-      const rows = [...document.querySelectorAll("div")].filter(d =>
-        d.childElementCount === 2 && /package\\.json$/.test(d.innerText.trim()));
-      if (!rows.length) return "no-row";
-      rows[0].click();
-      return "clicked";
-    })()`);
-    await sleep(2500);
-    seq.monacoMounted = await js(`!!document.querySelector(".monaco-editor")`);
-    seq.hasLines = await js(`document.querySelectorAll(".view-line").length`);
-    seq.firstLine = await js(`document.querySelector(".view-line")?.innerText?.slice(0,40) ?? null`);
-    seq.tabShown = await js(`!!document.body.innerText.match(/package\\.json/)`);
-
-    // --- save round-trip, against a throwaway file ---
-    const edited = process.env.TH_SMOKE_FILE;
-    if (edited) {
-      const r = await fileSvc.read(edited);
-      seq.readBack = r.content.trim();
-      const w = await fileSvc.write(edited, "EDITED BY TEST\n", r.mtimeMs);
-      seq.saved = w.ok;
-      seq.afterSave = (await fileSvc.read(edited)).content.trim();
-      // A stale mtime must be refused, not silently clobbered.
-      const stale = await fileSvc.write(edited, "SHOULD NOT LAND\n", r.mtimeMs);
-      seq.staleRefused = stale.conflict === true;
-      seq.stillCorrect = (await fileSvc.read(edited)).content.trim();
-    }
+    seq.hasTimelineTab = await js(`!!document.body.innerText.match(/timeline/)`);
+    seq.agentRows = await js(`document.body.innerText.split("\\n").filter(l=>/tok|Audit|Research|Design/.test(l)).length`);
+    seq.railText = await js(`(document.body.innerText.match(/TOKENS[\\s\\S]{0,120}/)?.[0] ?? "").replace(/\\s+/g," ").slice(0,110)`);
     v.click = seq;
     await sleep(4000);
     v.paneCount = await win!.webContents.executeJavaScript(

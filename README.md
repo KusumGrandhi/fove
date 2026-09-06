@@ -52,6 +52,7 @@ widgets will live.
 | `⌘J` | split down, running `claude` |
 | `⌘G` | split right, git status + diff |
 | `⌘E` | split right, file editor |
+| `⌘R` | split right, subagent tree + timeline |
 | `⌘S` | save the focused editor |
 | `⌘W` | close pane |
 | `⌘T` | new tab |
@@ -64,7 +65,8 @@ Drag a divider to resize. Click a pane to focus it.
 ```
 app shell      tabs · keymap                 src/renderer/App.tsx
 layout engine  split tree · geometry         src/shared/layout.ts   (pure, tested)
-pane kinds     terminal · git · editor       src/renderer/panes/
+pane kinds     terminal · git · editor ·      src/renderer/panes/
+               agents
 services       pty · store                   src/main/
 ```
 
@@ -97,6 +99,16 @@ file with no module resolution, so channel names are duplicated in
 does not resolve against a package's `exports` map, so the five Monaco workers
 are imported via `../../../node_modules/monaco-editor/...`. Without them the
 editor renders but every language feature silently does nothing.
+
+**The AI layer reads what Claude Code already writes.** Sessions live in
+`~/.claude/projects/<slug>/*.jsonl`, so the subagent tree, token totals and
+model list need no hooks and no cooperation from the CLI. Subagent logs key on
+a hex `agentId` while the main transcript keys the same agent by its `toolu_…`
+tool_use id; the `agent-<id>.meta.json` sidecars join the two.
+
+**Token totals come from `modelUsage`, never `usage`.** On a result message
+`usage` counts only the top-level loop and omits every subagent token — for an
+app built around subagents that would make every figure quietly wrong.
 
 **Editor saves are guarded by mtime.** An agent editing the same file produces
 a visible conflict instead of a silent overwrite — see `FileService.write`.

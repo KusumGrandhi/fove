@@ -11,12 +11,14 @@ import { Workspace } from "./layout/Workspace.js";
 import { TerminalPane } from "./panes/Terminal.js";
 import { GitStatusPane } from "./panes/GitStatus.js";
 import { EditorPane } from "./panes/Editor.js";
+import { AgentsPane } from "./panes/Agents.js";
+import { AgentsWidget, SkillsWidget, TokensWidget, useSnapshot } from "./ui/widgets.js";
 import { C, Divider, ToolButton } from "./ui/Chrome.js";
 import {
   closePane, isValid, leaf, newId, paneIds, split, type Dir, type Node,
 } from "../shared/layout.js";
 
-type PaneKind = "shell" | "claude" | "git" | "editor";
+type PaneKind = "shell" | "claude" | "git" | "editor" | "agents";
 
 interface PaneSpec {
   id: string;
@@ -60,6 +62,9 @@ export function App() {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string>("");
   const restored = useRef(false);
+  /** The directory panes default to: where the app was launched. */
+  const [appCwd, setAppCwd] = useState<string>("");
+  useEffect(() => { void window.th.appCwd().then(setAppCwd); }, []);
 
   // ---- restore / persist ---------------------------------------------------
   useEffect(() => {
@@ -165,6 +170,7 @@ export function App() {
       else if (e.key === "j") { e.preventDefault(); doSplit("column", "claude"); }
       else if (e.key === "g") { e.preventDefault(); doSplit("row", "git"); }
       else if (e.key === "e") { e.preventDefault(); doSplit("row", "editor"); }
+      else if (e.key === "r") { e.preventDefault(); doSplit("row", "agents"); }
       else if (e.key === "Enter") { e.preventDefault(); doSplit("row", "claude"); }
       else if (/^[1-9]$/.test(e.key)) {
         const i = Number(e.key) - 1;
@@ -175,9 +181,18 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [doSplit, doClosePane, addTab, tabs]);
 
+  // The rail watches whatever directory the active tab is pointed at. The hook
+  // runs unconditionally -- before the `!active` early return -- because hooks
+  // cannot be called conditionally.
+  const railCwd =
+    active?.panes[active.focusedPaneId]?.cwd ??
+    (active ? Object.values(active.panes)[0]?.cwd : undefined) ??
+    appCwd;
+  const snap = useSnapshot(railCwd, 2500);
+
   // Panes inherit the tab's directory; the git pane needs one to look at.
   const cwdOf = (tab: Tab): string =>
-    tab.panes[tab.focusedPaneId]?.cwd ?? Object.values(tab.panes)[0]?.cwd ?? ".";
+    tab.panes[tab.focusedPaneId]?.cwd ?? Object.values(tab.panes)[0]?.cwd ?? appCwd;
 
   if (!active) return <div style={S.boot}>starting…</div>;
 
@@ -213,6 +228,7 @@ export function App() {
         <ToolButton label="Shell" icon="❯" onClick={() => doSplit("row", "shell")} />
         <ToolButton label="Git" hint="⌘G" icon="⎇" onClick={() => doSplit("row", "git")} />
         <ToolButton label="Editor" hint="⌘E" icon="◧" onClick={() => doSplit("row", "editor")} />
+        <ToolButton label="Agents" hint="⌘R" icon="◉" onClick={() => doSplit("row", "agents")} />
         <Divider />
         <ToolButton label="New tab" hint="⌘T" icon="＋" onClick={addTab} />
         <div style={S.grow} />
@@ -253,6 +269,7 @@ export function App() {
                       {spec.kind === "claude" ? "✳ claude"
                         : spec.kind === "git" ? "⎇ git"
                         : spec.kind === "editor" ? "◧ editor"
+                        : spec.kind === "agents" ? "◉ agents"
                         : "❯ shell"}
                     </span>
                     <div style={S.grow} />
@@ -273,6 +290,8 @@ export function App() {
                       <GitStatusPane cwd={spec.cwd ?? cwdOf(active)} />
                     ) : spec.kind === "editor" ? (
                       <EditorPane cwd={spec.cwd ?? cwdOf(active)} />
+                    ) : spec.kind === "agents" ? (
+                      <AgentsPane cwd={spec.cwd ?? cwdOf(active)} />
                     ) : (
                       <TerminalPane
                         paneId={paneId}
@@ -293,7 +312,9 @@ export function App() {
         <aside style={S.rail}>
           <div style={S.railHeader}>STATS</div>
           <div style={S.railBody}>
-            <div style={S.railPlaceholder}>widgets go here</div>
+            <TokensWidget snap={snap} />
+            <AgentsWidget snap={snap} />
+            <SkillsWidget />
           </div>
         </aside>
       </div>
