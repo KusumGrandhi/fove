@@ -14,13 +14,28 @@ import { replaySession } from "./data/replay.ts";
 import { formatDuration, formatTokens } from "./data/usage.ts";
 import { AgentTimeline } from "./panes/AgentTimeline.tsx";
 import { AgentTreeView } from "./panes/AgentTree.tsx";
-import { C } from "./panes/theme.ts";
+import { C, fit } from "./panes/theme.ts";
 import type { SessionSummary } from "./data/types.ts";
 
 type View = "sessions" | "tree" | "timeline";
 
+/**
+ * OpenTUI queries the terminal directly and ignores COLUMNS/LINES, reporting a
+ * default 80x24 when there is no tty. Honouring the env vars keeps the app
+ * driveable from a harness and lets a user force a size.
+ */
+function useDims() {
+  const live = useTerminalDimensions();
+  const envW = Number(process.env.COLUMNS);
+  const envH = Number(process.env.LINES);
+  return () => ({
+    width: Number.isFinite(envW) && envW > 0 ? envW : live().width,
+    height: Number.isFinite(envH) && envH > 0 ? envH : live().height,
+  });
+}
+
 function App() {
-  const dims = useTerminalDimensions();
+  const dims = useDims();
   const [sessions] = createResource(() => listSessions());
   const [cursor, setCursor] = createSignal(0);
   const [opened, setOpened] = createSignal<SessionSummary | undefined>();
@@ -28,6 +43,28 @@ function App() {
   const [agentCursor, setAgentCursor] = createSignal(0);
 
   const [replay] = createResource(opened, (s) => replaySession(s));
+
+  /** Rows that fit below the header and hint line. */
+  const listRows = () => Math.max(3, dims().height - 5);
+  /** Scroll the window so the cursor stays visible. */
+  const listOffset = () => {
+    const n = (sessions() ?? []).length;
+    const rows = listRows();
+    if (n <= rows) return 0;
+    return Math.max(0, Math.min(n - rows, cursor() - Math.floor(rows / 2)));
+  };
+  const visibleSessions = () =>
+    (sessions() ?? []).slice(listOffset(), listOffset() + listRows());
+
+  const headerInfo = () => {
+    const s = opened();
+    if (!s) return "M1 inspector";
+    const r = replay();
+    if (!r) return `${s.sessionId.slice(0, 8)} · replaying…`;
+    const u = r.usage.current;
+    const tok = formatTokens(u.inputTokens + u.cacheReadTokens + u.cacheCreationTokens);
+    return `${s.sessionId.slice(0, 8)} · ${agents().length} agents · ${tok} tok · ${r.stats.parsed}/${r.stats.total} lines in ${r.elapsedMs}ms`;
+  };
 
   const agents = () => {
     const r = replay();
@@ -61,23 +98,10 @@ function App() {
 
   return (
     <box style={{ flexDirection: "column", width: "100%", height: "100%", backgroundColor: C.bg }}>
-      {/* Header */}
-      <box style={{ flexDirection: "row", backgroundColor: C.bgAlt }}>
-        <text content=" terminal-helper " style={{ fg: C.accent }} />
-        <text content={`M1 inspector `} style={{ fg: C.dim }} />
-        <Show when={opened()}>
-          <text content={`│ ${opened()!.sessionId.slice(0, 8)} `} style={{ fg: C.fg }} />
-          <Show when={replay()}>
-            <text
-              content={`│ ${agents().length} agents │ ${formatTokens(
-                replay()!.usage.current.inputTokens +
-                  replay()!.usage.current.cacheReadTokens +
-                  replay()!.usage.current.cacheCreationTokens,
-              )} tok │ parsed ${replay()!.stats.parsed}/${replay()!.stats.total} in ${replay()!.elapsedMs}ms `}
-              style={{ fg: C.dim }}
-            />
-          </Show>
-        </Show>
+      {/* Header -- one clipped line; OpenTUI will not clip it for us. */}
+      <box style={{ flexDirection: "row", width: "100%", flexShrink: 0, backgroundColor: C.bgAlt }}>
+        <text content=" terminal-helper " style={{ fg: C.accent, flexShrink: 0 }} />
+        <text content={fit(headerInfo(), Math.max(0, dims().width - 17))} style={{ fg: C.dim, flexShrink: 0 }} />
       </box>
 
       {/* Body */}
@@ -85,16 +109,27 @@ function App() {
         when={view() !== "sessions"}
         fallback={
           <box style={{ flexDirection: "column", paddingTop: 1 }}>
-            <text content="  Sessions on this machine (↑↓ move · ⏎ open · q quit)" style={{ fg: C.dim }} />
+            <text
+              content={fit(
+                `  ${(sessions() ?? []).length} sessions  ·  ↑↓ move · ⏎ open · q quit${
+                  (sessions() ?? []).length ? `   [${cursor() + 1}/${(sessions() ?? []).length}]` : ""
+                }`,
+                dims().width,
+              )}
+              style={{ fg: C.dim }}
+            />
             <Show when={sessions()} fallback={<text content="  scanning…" style={{ fg: C.dim }} />}>
-              <For each={(sessions() ?? []).slice(0, Math.max(5, dims().height - 6))}>
+              <For each={visibleSessions()}>
                 {(s, i) => {
-                  const sel = () => i() === cursor();
+                  const sel = () => i() + listOffset() === cursor();
                   return (
-                    <box style={{ flexDirection: "row", backgroundColor: sel() ? C.selBg : undefined }}>
-                      <text content={`  ${s.sessionId.slice(0, 8)} `} style={{ fg: sel() ? C.fg : C.dim }} />
-                      <text content={`${(s.sizeBytes / 1e6).toFixed(1).padStart(5)}MB  `} style={{ fg: C.faint }} />
-                      <text content={s.projectSlug.replace(/^-Users-[^-]+-/, "").slice(0, 52)} style={{ fg: sel() ? C.accent : C.dim }} />
+                    <box style={{ flexDirection: "row", width: "100%", flexShrink: 0, backgroundColor: sel() ? C.selBg : undefined }}>
+                      <text content={`  ${s.sessionId.slice(0, 8)} `} style={{ fg: sel() ? C.fg : C.dim, flexShrink: 0 }} />
+                      <text content={`${(s.sizeBytes / 1e6).toFixed(1).padStart(6)}MB  `} style={{ fg: C.faint, flexShrink: 0 }} />
+                      <text
+                        content={fit(s.projectSlug.replace(/^-Users-[^-]+-/, ""), Math.max(0, dims().width - 20))}
+                        style={{ fg: sel() ? C.accent : C.dim, flexShrink: 0 }}
+                      />
                     </box>
                   );
                 }}
