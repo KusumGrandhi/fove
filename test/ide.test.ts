@@ -99,7 +99,14 @@ beforeAll(async () => {
   const { IdeService } = await import("../src/main/ide.js");
   ide = new IdeService({
     openFile: (r) => { opened.push(r.filePath); },
-    openDiff: async () => diffVerdict,
+    openDiff: async (req) => {
+      if (diffVerdict === "saved") {
+        const { FileService } = await import("../src/main/files.js");
+        const r = await new FileService().write(req.newPath, req.newContents);
+        if (r.error) return "rejected";
+      }
+      return diffVerdict;
+    },
     closeTab: () => {},
     closeAllDiffTabs: () => {},
     openEditors: async () => [{ filePath: "/w/a.ts", isDirty: false }],
@@ -234,18 +241,64 @@ describe("JSON-RPC", () => {
   });
 
   test("openDiff returns the CLI's expected verdict strings", async () => {
+    // A writable path: accepting now persists, so an unwritable one would
+    // correctly come back rejected.
+    const target = join(dir, "verdict.ts");
     const c = await client(token);
     diffVerdict = "saved";
     let r = await c.call("tools/call", { name: "openDiff", arguments: {
-      old_file_path: "/w/a.ts", new_file_path: "/w/a.ts", new_file_contents: "x", tab_name: "a.ts" } }, 4) as
+      old_file_path: target, new_file_path: target, new_file_contents: "x", tab_name: "a.ts" } }, 4) as
       { result: { content: { text: string }[] } };
     expect(r.result.content[0]!.text).toBe("FILE_SAVED");
 
     diffVerdict = "rejected";
     r = await c.call("tools/call", { name: "openDiff", arguments: {
-      old_file_path: "/w/a.ts", new_file_path: "/w/a.ts", new_file_contents: "x", tab_name: "a.ts" } }, 5) as
+      old_file_path: target, new_file_path: target, new_file_contents: "x", tab_name: "a.ts" } }, 5) as
       { result: { content: { text: string }[] } };
     expect(r.result.content[0]!.text).toBe("DIFF_REJECTED");
+    c.close();
+  });
+
+  test("a write that cannot land reports DIFF_REJECTED rather than claiming success", async () => {
+    const c = await client(token);
+    diffVerdict = "saved";
+    const r = await c.call("tools/call", { name: "openDiff", arguments: {
+      old_file_path: "/nonexistent-dir-xyz/a.ts", new_file_path: "/nonexistent-dir-xyz/a.ts",
+      new_file_contents: "x", tab_name: "a.ts" } }, 22) as
+      { result: { content: { text: string }[] } };
+    expect(r.result.content[0]!.text).toBe("DIFF_REJECTED");
+    c.close();
+  });
+
+  test("accepting a diff actually writes the file -- FILE_SAVED must not be a lie", async () => {
+    const { writeFile, readFile } = await import("node:fs/promises");
+    const target = join(dir, "diffed.txt");
+    await writeFile(target, "old contents\n");
+
+    const c = await client(token);
+    diffVerdict = "saved";
+    const r = await c.call("tools/call", { name: "openDiff", arguments: {
+      old_file_path: target, new_file_path: target,
+      new_file_contents: "new contents\n", tab_name: "diffed.txt" } }, 20) as
+      { result: { content: { text: string }[] } };
+    expect(r.result.content[0]!.text).toBe("FILE_SAVED");
+    expect(await readFile(target, "utf8")).toBe("new contents\n");
+    c.close();
+  });
+
+  test("rejecting a diff leaves the file untouched", async () => {
+    const { writeFile, readFile } = await import("node:fs/promises");
+    const target = join(dir, "kept.txt");
+    await writeFile(target, "original\n");
+
+    const c = await client(token);
+    diffVerdict = "rejected";
+    const r = await c.call("tools/call", { name: "openDiff", arguments: {
+      old_file_path: target, new_file_path: target,
+      new_file_contents: "should not land\n", tab_name: "kept.txt" } }, 21) as
+      { result: { content: { text: string }[] } };
+    expect(r.result.content[0]!.text).toBe("DIFF_REJECTED");
+    expect(await readFile(target, "utf8")).toBe("original\n");
     c.close();
   });
 

@@ -181,8 +181,8 @@ const pendingDiffs = new Map<string, (v: "saved" | "rejected") => void>();
 
 const ide = new IdeService({
   openFile: (req) => { send(CH.ideOpenFile, req); },
-  openDiff: (req) =>
-    new Promise<"saved" | "rejected">((resolve) => {
+  openDiff: async (req) => {
+    const verdict = await new Promise<"saved" | "rejected">((resolve) => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       pendingDiffs.set(id, resolve);
       send(CH.ideOpenDiff, { ...req, id });
@@ -190,7 +190,18 @@ const ide = new IdeService({
       setTimeout(() => {
         if (pendingDiffs.delete(id)) resolve("rejected");
       }, 10 * 60_000);
-    }),
+    });
+    // "FILE_SAVED" is a claim that the content is on disk, so accepting must
+    // actually persist it -- otherwise Claude proceeds believing an edit landed
+    // that never happened. No mtime guard: the user just looked at this diff
+    // and said yes, and Claude supplied the full new contents.
+    if (verdict === "saved") {
+      const target = req.newPath || req.oldPath;
+      const res = await fileSvc.write(target, req.newContents);
+      if (res.error) return "rejected";
+    }
+    return verdict;
+  },
   closeTab: () => {},
   closeAllDiffTabs: () => {},
   openEditors: async () => ideEditors,

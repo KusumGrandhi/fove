@@ -100,7 +100,7 @@ const EXTRA_EXTENSIONS: Record<string, string> = {
   ".ndjson": "json",
 };
 
-function languageForPath(path: string): string {
+export function languageForPath(path: string): string {
   const file = (path.split("/").pop() ?? path).toLowerCase();
   const dot = file.lastIndexOf(".");
   const ext = dot > 0 ? file.slice(dot) : "";
@@ -133,7 +133,7 @@ function languageForPath(path: string): string {
 
 /** One dark theme, defined once, matching the app chrome. */
 let themeReady = false;
-function ensureTheme(): void {
+export function ensureTheme(): void {
   if (themeReady) return;
   monaco.editor.defineTheme("th-dark", {
     base: "vs-dark",

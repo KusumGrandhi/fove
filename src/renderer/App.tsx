@@ -12,6 +12,7 @@ import { TerminalPane } from "./panes/Terminal.js";
 import { GitStatusPane } from "./panes/GitStatus.js";
 import { EditorPane } from "./panes/Editor.js";
 import { AgentsPane } from "./panes/Agents.js";
+import { DiffView, type DiffRequest } from "./panes/DiffView.js";
 import { AgentsWidget, SkillsWidget, TokensWidget, useSnapshot } from "./ui/widgets.js";
 import { TeammateBar, TeammateView, useTeammates } from "./ui/Teammates.js";
 import { C, Divider, ToolButton } from "./ui/Chrome.js";
@@ -272,6 +273,24 @@ export function App() {
   const snap = useSnapshot(railCwd, 2500);
 
   /**
+   * Diffs Claude is blocked on, oldest first. A turn can produce several, and
+   * each must get its own verdict, so they queue rather than overwrite.
+   */
+  const [diffs, setDiffs] = useState<DiffRequest[]>([]);
+  useEffect(() => {
+    const off = window.th.onIdeOpenDiff((raw) => {
+      const d = raw as DiffRequest;
+      if (d?.id) setDiffs((prev) => [...prev, d]);
+    });
+    return off;
+  }, []);
+
+  const answerDiff = useCallback((id: string, verdict: "saved" | "rejected") => {
+    window.th.ideDiffResult(id, verdict);
+    setDiffs((prev) => prev.filter((d) => d.id !== id));
+  }, []);
+
+  /**
    * Claude Code asked this app to open a file (it discovered us as its IDE).
    *
    * Reuse an editor pane if the tab has one -- opening a new pane per file
@@ -417,6 +436,9 @@ export function App() {
       {openMate && team?.socket && (
         <TeammateView socket={team.socket} mate={openMate} onClose={() => setOpenMateId(null)} />
       )}
+
+      {/* A diff Claude is blocked on. One at a time; the rest wait behind it. */}
+      {diffs[0] && <DiffView req={diffs[0]} onVerdict={answerDiff} />}
 
       {/* --- the panes live inside this frame, beside the stats rail --- */}
       <div style={S.stage}>
