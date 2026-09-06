@@ -113,6 +113,11 @@ does not resolve against a package's `exports` map, so the five Monaco workers
 are imported via `../../../node_modules/monaco-editor/...`. Without them the
 editor renders but every language feature silently does nothing.
 
+**Editor languages come from Monaco's own registry**, not a hand-written map —
+91 languages, and new ones arrive with a Monaco upgrade. A small table adds
+what Monaco does not ship (Vue/Svelte → html, Haskell → fsharp) and the
+extensionless names a registry lookup misses (Makefile, Gemfile, .env, dotfiles).
+
 **The AI layer reads what Claude Code already writes.** Sessions live in
 `~/.claude/projects/<slug>/*.jsonl`, so the subagent tree, token totals and
 model list need no hooks and no cooperation from the CLI. Subagent logs key on

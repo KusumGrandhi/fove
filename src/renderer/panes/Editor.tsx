@@ -46,6 +46,91 @@ interface Entry { name: string; path: string; dir: boolean; size: number }
   },
 };
 
+/**
+ * Resolve a file to a Monaco language id using Monaco's OWN registry.
+ *
+ * Monaco ships ~90 languages and each declares its extensions, filenames and
+ * aliases. Asking the registry means every one of them works -- and new ones
+ * arrive with a Monaco upgrade -- instead of depending on a hand-written map
+ * that silently falls back to plaintext for anything not typed out by hand.
+ */
+/**
+ * Extensions Monaco's registry does not claim.
+ *
+ * Rather than highlight them as plaintext, borrow the closest grammar Monaco
+ * does ship. Vue SFCs are mostly HTML with script/style blocks; Haskell has no
+ * bundled grammar, so F# is the nearest ML-family fit.
+ */
+const EXTRA_FILENAMES: Record<string, string> = {
+  makefile: "makefile",
+  "gnumakefile": "makefile",
+  gemfile: "ruby",
+  rakefile: "ruby",
+  podfile: "ruby",
+  brewfile: "ruby",
+  vagrantfile: "ruby",
+  procfile: "yaml",
+  ".gitignore": "ini",
+  ".gitattributes": "ini",
+  ".dockerignore": "ini",
+  ".npmrc": "ini",
+  ".editorconfig": "ini",
+  ".bashrc": "shell",
+  ".zshrc": "shell",
+  ".bash_profile": "shell",
+  ".profile": "shell",
+};
+
+const EXTRA_EXTENSIONS: Record<string, string> = {
+  ".vue": "html",
+  ".svelte": "html",
+  ".astro": "html",
+  ".hs": "fsharp",
+  ".lhs": "fsharp",
+  ".zig": "cpp",
+  ".nim": "python",
+  ".v": "go",
+  ".gleam": "rust",
+  ".prisma": "graphql",
+  ".mdx": "markdown",
+  ".tfvars": "hcl",
+  ".env": "ini",
+  ".gitignore": "ini",
+  ".jsonl": "json",
+  ".ndjson": "json",
+};
+
+function languageForPath(path: string): string {
+  const file = (path.split("/").pop() ?? path).toLowerCase();
+  const dot = file.lastIndexOf(".");
+  const ext = dot > 0 ? file.slice(dot) : "";
+
+  // Dotfile families: ".env", ".env.local", ".env.production" all read as ini.
+  if (file.startsWith(".env")) return "ini";
+  if (EXTRA_FILENAMES[file]) return EXTRA_FILENAMES[file]!;
+
+  let extMatch: string | undefined;
+  for (const lang of monaco.languages.getLanguages()) {
+    // An exact filename wins over an extension: "Dockerfile", "Makefile",
+    // ".bashrc" and friends carry no useful extension.
+    if (lang.filenames?.some((f) => f.toLowerCase() === file)) return lang.id;
+    if (lang.filenamePatterns?.some((p) =>
+      new RegExp(`^${p.toLowerCase().replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`).test(file),
+    )) {
+      return lang.id;
+    }
+    if (!extMatch && ext && lang.extensions?.some((e) => e.toLowerCase() === ext)) {
+      extMatch = lang.id;
+    }
+  }
+  return extMatch ?? EXTRA_EXTENSIONS[ext] ?? "plaintext";
+}
+
+/** Exposed so the smoke test can interrogate language resolution. */
+(globalThis as unknown as { monaco: typeof monaco }).monaco = monaco;
+(globalThis as unknown as { __thLanguageForPath: (p: string) => string }).__thLanguageForPath =
+  (p: string) => languageForPath(p);
+
 /** One dark theme, defined once, matching the app chrome. */
 let themeReady = false;
 function ensureTheme(): void {
@@ -94,12 +179,14 @@ export function EditorPane(props: { cwd: string; initialPath?: string }) {
     if (existing) { setActivePath(path); return; }
 
     const r = (await window.th.fileRead(path)) as OpenFile & { error?: string };
+    // Monaco's registry is authoritative; main's map is only a hint.
+    const language = languageForPath(path);
     const file: OpenFile = {
       path,
       name: path.split("/").pop() ?? path,
       content: r.content ?? "",
       mtimeMs: r.mtimeMs ?? 0,
-      language: r.language ?? "plaintext",
+      language,
       dirty: false,
       readonly: r.readonly,
       error: r.error,

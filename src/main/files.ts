@@ -29,7 +29,13 @@ export interface ReadResult {
   error?: string;
 }
 
-/** Extension -> Monaco language id. */
+/**
+ * Extension -> Monaco language id.
+ *
+ * Only a hint: the renderer resolves the real language from Monaco's own
+ * registry (~90 languages), which is authoritative and grows with Monaco. This
+ * map exists so a caller with no editor still gets something reasonable.
+ */
 const LANGS: Record<string, string> = {
   ts: "typescript", tsx: "typescript", mts: "typescript", cts: "typescript",
   js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
