@@ -184,23 +184,33 @@ async function runSmoke(): Promise<void> {
     // --- the pane renders inside the real window ---
     await sleep(3000);
     const js = (code: string) => win!.webContents.executeJavaScript(code);
-    const clickBtn = (re: string) =>
-      js(`[...document.querySelectorAll("button")].find(b=>${re}.test(b.innerText))?.click(), 1`);
     const seq: Record<string, unknown> = {};
 
-    // --- stats rail widgets ---
     await sleep(3500);
-    seq.railTokens = await js(`!!document.body.innerText.match(/TOKENS/)`);
-    seq.railAgents = await js(`!!document.body.innerText.match(/AGENTS/)`);
-    seq.railSkills = await js(`!!document.body.innerText.match(/SKILLS/)`);
-    seq.railHasNumbers = await js(`!!document.body.innerText.match(/\\d+(\\.\\d+)?[kM]\\b/)`);
+    // One workspace at startup, named after the launch folder.
+    seq.tabCount = await js(`document.querySelectorAll("[title^='/']").length`);
+    seq.paneCount = await js(`document.querySelectorAll("[data-pane]").length`);
+    seq.statusText = await js(
+      `(document.body.innerText.match(/\\d+ panes?[\\s\\S]{0,80}/)?.[0] ?? "").replace(/\\s+/g," ").slice(0,90)`,
+    );
+    // The workspace directory reaches the panes, not just the label.
+    seq.railHasSession = await js(`!!document.body.innerText.match(/TOKENS[\\s\\S]{0,40}(opus|sonnet|haiku|—)/)`);
+    seq.worktreePicker = await js(`!!document.querySelector("select")`);
+    seq.worktreeOptions = await js(`[...(document.querySelector("select")?.options ?? [])].map(o=>o.text).join("|")`);
 
-    // --- agents pane ---
-    await clickBtn("/\\bAgents\\b/"); await sleep(3000);
-    seq.panes = await js(`document.querySelectorAll("[data-pane]").length`);
-    seq.hasTimelineTab = await js(`!!document.body.innerText.match(/timeline/)`);
-    seq.agentRows = await js(`document.body.innerText.split("\\n").filter(l=>/tok|Audit|Research|Design/.test(l)).length`);
-    seq.railText = await js(`(document.body.innerText.match(/TOKENS[\\s\\S]{0,120}/)?.[0] ?? "").replace(/\\s+/g," ").slice(0,110)`);
+    // Open the "feature" worktree as its own workspace.
+    await js(`(() => {
+      const sel = document.querySelector("select");
+      const opt = [...sel.options].find(o => o.text === "feature");
+      sel.value = opt.value;
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      return 1;
+    })()`);
+    await sleep(3000);
+    seq.tabsAfter = await js(`[...document.querySelectorAll("[title^='/']")].map(b=>b.innerText.replace(/\\s+/g," ").trim()).join(" | ")`);
+    seq.statusAfter = await js(
+      `(document.body.innerText.match(/\\d+ panes?[\\s\\S]{0,80}/)?.[0] ?? "").replace(/\\s+/g," ").slice(0,90)`,
+    );
     v.click = seq;
     await sleep(4000);
     v.paneCount = await win!.webContents.executeJavaScript(

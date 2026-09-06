@@ -27,9 +27,21 @@ interface PaneSpec {
   cwd?: string;
 }
 
+/**
+ * A tab is a workspace: one directory, with panes arranged inside it.
+ *
+ * That directory is usually a git worktree, which is why "tab per worktree" and
+ * "tab per project" are the same feature -- a worktree is just another
+ * directory on disk. Every pane in a tab inherits the tab's cwd, so a shell, a
+ * git view and an agent tree in one tab are all looking at the same checkout.
+ */
 interface Tab {
   id: string;
   name: string;
+  /** The workspace directory. Every pane inside uses it. */
+  cwd: string;
+  /** Branch name when the directory is a git worktree, for the tab label. */
+  branch?: string;
   tree: Node;
   panes: Record<string, PaneSpec>;
   focusedPaneId: string;
@@ -47,11 +59,13 @@ const makePane = (kind: PaneKind, cwd?: string): PaneSpec => ({
   cwd,
 });
 
-function newTab(name: string, kind: PaneKind = "shell"): Tab {
-  const pane = makePane(kind);
+function newTab(cwd: string, kind: PaneKind = "shell", branch?: string): Tab {
+  const pane = makePane(kind, cwd);
   return {
     id: newId("t"),
-    name,
+    name: cwd.split("/").filter(Boolean).pop() ?? cwd,
+    cwd,
+    branch,
     tree: leaf(pane.id),
     panes: { [pane.id]: pane },
     focusedPaneId: pane.id,
@@ -64,27 +78,30 @@ export function App() {
   const restored = useRef(false);
   /** The directory panes default to: where the app was launched. */
   const [appCwd, setAppCwd] = useState<string>("");
-  useEffect(() => { void window.th.appCwd().then(setAppCwd); }, []);
 
   // ---- restore / persist ---------------------------------------------------
   useEffect(() => {
     void (async () => {
       const saved = (await window.th.loadLayout()) as Persisted | null;
       // A corrupt or stale layout must never leave the user with a blank app.
+      const cwd = await window.th.appCwd();
+      setAppCwd(cwd);
       const usable =
         saved &&
         Array.isArray(saved.tabs) &&
         saved.tabs.length > 0 &&
         saved.tabs.every((t) => t.tree && isValid(t.tree));
       if (usable) {
-        setTabs(saved!.tabs);
+        // Tabs saved before workspaces had no cwd; adopt the launch directory.
+        setTabs(saved!.tabs.map((t) => ({ ...t, cwd: t.cwd || cwd, name: t.name || cwd.split("/").pop()! })));
         setActiveTabId(
           saved!.tabs.some((t) => t.id === saved!.activeTabId)
             ? saved!.activeTabId
             : saved!.tabs[0]!.id,
         );
       } else {
-        const t = newTab("1");
+        // First run: one workspace, the folder the app was launched from.
+        const t = newTab(cwd);
         setTabs([t]);
         setActiveTabId(t.id);
       }
@@ -107,7 +124,7 @@ export function App() {
   const doSplit = useCallback(
     (dir: Dir, kind: PaneKind = "shell") => {
       if (!active) return;
-      const pane = makePane(kind, active.panes[active.focusedPaneId]?.cwd);
+      const pane = makePane(kind, active.cwd);
       updateTab(active.id, (t) => ({
         ...t,
         tree: split(t.tree, t.focusedPaneId, pane.id, dir),
@@ -128,7 +145,7 @@ export function App() {
       setTabs((prev) => {
         const rest = prev.filter((t) => t.id !== active.id);
         if (rest.length === 0) {
-          const t = newTab("1");
+          const t = newTab(active.cwd || appCwd);
           setActiveTabId(t.id);
           return [t];
         }
@@ -149,13 +166,27 @@ export function App() {
     });
   }, [active, activeTabId, updateTab]);
 
-  const addTab = useCallback(() => {
-    setTabs((prev) => {
-      const t = newTab(String(prev.length + 1));
+  /** Open a directory as a new workspace. Falls back to the current one. */
+  const addTab = useCallback(
+    async (cwd?: string, branch?: string) => {
+      const dir = cwd ?? (await window.th.pickFolder());
+      if (!dir) return;
+      const t = newTab(dir, "shell", branch);
+      setTabs((prev) => [...prev, t]);
       setActiveTabId(t.id);
-      return [...prev, t];
-    });
-  }, []);
+    },
+    [],
+  );
+
+  /** Worktrees of the active workspace, offered as one-click new tabs. */
+  const [worktrees, setWorktrees] = useState<{ path: string; branch?: string }[]>([]);
+  useEffect(() => {
+    if (!active?.cwd) return;
+    void (async () => {
+      const w = (await window.th.gitWorktrees(active.cwd)) as { path: string; branch?: string }[];
+      setWorktrees(w ?? []);
+    })();
+  }, [active?.cwd]);
 
   // ---- keybindings ---------------------------------------------------------
   useEffect(() => {
@@ -166,7 +197,7 @@ export function App() {
       if (e.key === "d" && !e.shiftKey) { e.preventDefault(); doSplit("row"); }
       else if (e.key === "D" || (e.key === "d" && e.shiftKey)) { e.preventDefault(); doSplit("column"); }
       else if (e.key === "w") { e.preventDefault(); doClosePane(); }
-      else if (e.key === "t") { e.preventDefault(); addTab(); }
+      else if (e.key === "t") { e.preventDefault(); void addTab(); }
       else if (e.key === "j") { e.preventDefault(); doSplit("column", "claude"); }
       else if (e.key === "g") { e.preventDefault(); doSplit("row", "git"); }
       else if (e.key === "e") { e.preventDefault(); doSplit("row", "editor"); }
@@ -184,15 +215,12 @@ export function App() {
   // The rail watches whatever directory the active tab is pointed at. The hook
   // runs unconditionally -- before the `!active` early return -- because hooks
   // cannot be called conditionally.
-  const railCwd =
-    active?.panes[active.focusedPaneId]?.cwd ??
-    (active ? Object.values(active.panes)[0]?.cwd : undefined) ??
-    appCwd;
+  // The rail follows the active workspace.
+  const railCwd = active?.cwd || appCwd;
   const snap = useSnapshot(railCwd, 2500);
 
   // Panes inherit the tab's directory; the git pane needs one to look at.
-  const cwdOf = (tab: Tab): string =>
-    tab.panes[tab.focusedPaneId]?.cwd ?? Object.values(tab.panes)[0]?.cwd ?? appCwd;
+  const cwdOf = (tab: Tab): string => tab.cwd || appCwd;
 
   if (!active) return <div style={S.boot}>starting…</div>;
 
@@ -208,12 +236,13 @@ export function App() {
               key={t.id}
               onClick={() => setActiveTabId(t.id)}
               style={{ ...S.tab, ...(t.id === activeTabId ? S.tabActive : null) }}
-              title={`Tab ${t.name}`}
+              title={t.cwd}
             >
               {t.name}
+              {t.branch && <span style={S.tabBranch}>⎇ {t.branch}</span>}
             </button>
           ))}
-          <button onClick={addTab} style={S.tabAdd} title="New tab (⌘T)">+</button>
+          <button onClick={() => void addTab()} style={S.tabAdd} title="Open a folder as a new workspace (⌘T)">+</button>
         </div>
         <div style={S.grow} />
         <span style={S.appName}>terminal-helper</span>
@@ -230,7 +259,28 @@ export function App() {
         <ToolButton label="Editor" hint="⌘E" icon="◧" onClick={() => doSplit("row", "editor")} />
         <ToolButton label="Agents" hint="⌘R" icon="◉" onClick={() => doSplit("row", "agents")} />
         <Divider />
-        <ToolButton label="New tab" hint="⌘T" icon="＋" onClick={addTab} />
+        <ToolButton label="Open folder" hint="⌘T" icon="＋" onClick={() => void addTab()} />
+        {worktrees.length > 1 && (
+          <select
+            value=""
+            onChange={(e) => {
+              const w = worktrees.find((x) => x.path === e.target.value);
+              if (w) void addTab(w.path, w.branch);
+              e.target.value = "";
+            }}
+            style={S.wtSelect}
+            title="Open a worktree as a new workspace"
+          >
+            <option value="">⎇ worktree…</option>
+            {worktrees
+              .filter((w) => w.path !== active.cwd)
+              .map((w) => (
+                <option key={w.path} value={w.path}>
+                  {w.branch ?? w.path.split("/").pop()}
+                </option>
+              ))}
+          </select>
+        )}
         <div style={S.grow} />
         <ToolButton
           label="Close pane"
@@ -323,9 +373,13 @@ export function App() {
       <div style={S.statusbar}>
         <span>{paneCount} pane{paneCount === 1 ? "" : "s"}</span>
         <Divider />
-        <span>tab {active.name} of {tabs.length}</span>
+        <span title={active.cwd}>
+          {active.name}{active.branch ? ` · ⎇ ${active.branch}` : ""}
+        </span>
+        <Divider />
+        <span style={{ color: C.faint }}>{tabs.length} workspace{tabs.length === 1 ? "" : "s"}</span>
         <div style={S.grow} />
-        <span style={{ color: C.faint }}>drag a divider to resize</span>
+        <span style={{ color: C.faint }}>drag a pane header to move it</span>
       </div>
     </div>
   );
@@ -356,6 +410,12 @@ const S: Record<string, React.CSSProperties> = {
     WebkitAppRegion: "no-drag",
   } as React.CSSProperties,
   tabActive: { background: C.chromeHi, color: C.fg, border: `1px solid ${C.accent}` },
+  tabBranch: { color: C.faint, fontSize: 10, marginLeft: 6 },
+  wtSelect: {
+    background: "transparent", color: C.dim, border: `1px solid ${C.line}`,
+    borderRadius: 6, padding: "3px 6px", fontSize: 11, cursor: "pointer",
+    fontFamily: "system-ui",
+  },
   tabAdd: {
     padding: "3px 10px", borderRadius: 6, border: "none", background: "transparent",
     color: C.faint, cursor: "pointer", fontSize: 15, lineHeight: "16px",

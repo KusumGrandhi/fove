@@ -32,6 +32,14 @@ npm run dev          # build + launch
 └──────────────────────────────────────────────────┘
 ```
 
+**A tab is a workspace: one directory, with panes inside it.** Every pane in a
+tab — shell, claude, git, editor, agents — uses that tab's directory, so they
+are all looking at the same checkout. Since a git worktree is just another
+directory, "tab per worktree" and "tab per project" are the same feature: the
+⎇ picker in the toolbar opens any sibling worktree as its own workspace.
+
+The app starts with exactly one workspace, the folder it was launched from.
+
 Every shortcut is also a toolbar button, and every pane has its own ✕. The
 panes sit inside a framed workspace rather than filling the window edge to edge.
 
@@ -55,7 +63,7 @@ widgets will live.
 | `⌘R` | split right, subagent tree + timeline |
 | `⌘S` | save the focused editor |
 | `⌘W` | close pane |
-| `⌘T` | new tab |
+| `⌘T` | open a folder as a new workspace |
 | `⌘1..9` | switch tab |
 
 Drag a divider to resize. Click a pane to focus it.
