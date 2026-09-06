@@ -159,7 +159,14 @@ function pathOfModel(
   return null;
 }
 
-export function EditorPane(props: { cwd: string; initialPath?: string }) {
+export function EditorPane(props: {
+  cwd: string;
+  initialPath?: string;
+  /** Line to reveal after opening, e.g. from a diff hunk. */
+  initialLine?: number;
+  /** Changes per request, so opening the same path twice still acts. */
+  openNonce?: number;
+}) {
   const hostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   /** One Monaco model per file, so undo history survives tab switches. */
@@ -220,8 +227,22 @@ export function EditorPane(props: { cwd: string; initialPath?: string }) {
    * silently ignore every file after the first.
    */
   useEffect(() => {
-    if (props.initialPath) void openFile(props.initialPath);
-  }, [props.initialPath, openFile]);
+    if (!props.initialPath) return;
+    void (async () => {
+      await openFile(props.initialPath!);
+      const line = props.initialLine;
+      if (!line) return;
+      // The model is swapped in an effect, so reveal after it has landed.
+      requestAnimationFrame(() => {
+        const ed = editorRef.current;
+        if (!ed) return;
+        ed.revealLineInCenter(line);
+        ed.setPosition({ lineNumber: line, column: 1 });
+        ed.focus();
+      });
+    })();
+    // openNonce is in the deps so the same path can be reopened on demand.
+  }, [props.initialPath, props.initialLine, props.openNonce, openFile]);
 
   const save = useCallback(async () => {
     const f = files.find((x) => x.path === activePath);

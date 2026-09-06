@@ -2,7 +2,8 @@
  * Git pane: what changed, on which branch/worktree.
  *
  * Built for reviewing an agent's work: the change list is the primary content,
- * and clicking a file shows its diff. "Open in VS Code" is one click away on
+ * and clicking a file shows its diff. Files open in fove's own editor pane;
+ * "open in VS Code" remains available as an explicit escape hatch on
  * every file and every line -- the easy path, which stays even once an in-app
  * editor exists.
  */
@@ -27,7 +28,11 @@ const statusColor = (f: FileChange): string => {
     : C.dim;
 };
 
-export function GitStatusPane(props: { cwd: string }) {
+export function GitStatusPane(props: {
+  cwd: string;
+  /** Open a file in fove's own editor pane. */
+  onOpen?: (path: string, line?: number) => void;
+}) {
   const [root, setRoot] = useState<string | null>(null);
   const [status, setStatus] = useState<RepoStatus | null>(null);
   const [worktrees, setWorktrees] = useState<Worktree[]>([]);
@@ -123,13 +128,13 @@ export function GitStatusPane(props: { cwd: string }) {
             <div
               key={f.path}
               onClick={() => void openFile(f)}
-              onDoubleClick={() => window.th.openInEditor(`${root}/${f.path}`)}
+              onDoubleClick={() => props.onOpen?.(`${root}/${f.path}`)}
               style={{
                 ...S.row,
                 cursor: "pointer",
                 background: selected?.path === f.path ? "#1e2636" : undefined,
               }}
-              title={`${f.path}${f.from ? ` (was ${f.from})` : ""} — double-click to open in VS Code`}
+              title={`${f.path}${f.from ? ` (was ${f.from})` : ""} — double-click to open in the editor`}
             >
               <span style={{ width: 14, color: statusColor(f) }}>{statusLabel(f)}</span>
               <span style={{ ...S.ellipsis, color: selected?.path === f.path ? C.fg : C.dim }}>
@@ -152,9 +157,18 @@ export function GitStatusPane(props: { cwd: string }) {
                 <span style={{ color: C.del }}>−{diff.deletions}</span>
                 <button
                   style={S.openBtn}
+                  title="Open in the editor pane"
+                  onClick={() => props.onOpen?.(`${root}/${diff.path}`)}
+                >
+                  open
+                </button>
+                {/* The escape hatch stays, but is no longer the default. */}
+                <button
+                  style={S.openBtn}
+                  title="Open in VS Code"
                   onClick={() => window.th.openInEditor(`${root}/${diff.path}`)}
                 >
-                  open ↗
+                  ↗
                 </button>
               </div>
               <div style={S.diffBody}>
@@ -167,7 +181,7 @@ export function GitStatusPane(props: { cwd: string }) {
                       <div
                         key={li}
                         onClick={() =>
-                          window.th.openInEditor(`${root}/${diff.path}`, l.newNo ?? l.oldNo)
+                          props.onOpen?.(`${root}/${diff.path}`, l.newNo ?? l.oldNo)
                         }
                         style={{
                           ...S.diffLine,

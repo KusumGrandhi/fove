@@ -34,6 +34,10 @@ interface PaneSpec {
   cwd?: string;
   /** For editor panes: the file to show, e.g. one Claude asked us to open. */
   openPath?: string;
+  /** Line to reveal, when the request came from a diff or a stack frame. */
+  openLine?: number;
+  /** Changes on every request, so reopening the same path still fires. */
+  openNonce?: number;
   /** For claude panes routed at a non-default backend. */
   providerEnv?: Record<string, string>;
   providerLabel?: string;
@@ -366,30 +370,41 @@ export function App() {
    * would shred the layout during a busy turn -- otherwise split one off the
    * focused pane.
    */
-  useEffect(() => {
-    const off = window.th.onIdeOpenFile((raw) => {
-      const req = raw as { filePath?: string };
-      const file = req?.filePath;
+  const openInPane = useCallback(
+    (file: string, line?: number) => {
       if (!file || !active) return;
+      // Reuse an editor pane when the tab has one -- opening a new pane per
+      // file would shred the layout during a busy turn.
       const existing = Object.values(active.panes).find((p) => p.kind === "editor");
+      // The nonce forces a reopen when the same path is requested twice, which
+      // otherwise looks like a dead button.
+      const openAt = { openPath: file, openLine: line, openNonce: Date.now() };
       if (existing) {
         updateTab(active.id, (t) => ({
           ...t,
-          panes: { ...t.panes, [existing.id]: { ...existing, openPath: file } },
+          panes: { ...t.panes, [existing.id]: { ...existing, ...openAt } },
           focusedPaneId: existing.id,
         }));
         return;
       }
-      const pane = { ...makePane("editor", active.cwd), openPath: file };
+      const pane = { ...makePane("editor", active.cwd), ...openAt };
       updateTab(active.id, (t) => ({
         ...t,
         tree: split(t.tree, t.focusedPaneId, pane.id, "row"),
         panes: { ...t.panes, [pane.id]: pane },
         focusedPaneId: pane.id,
       }));
+    },
+    [active, updateTab],
+  );
+
+  useEffect(() => {
+    const off = window.th.onIdeOpenFile((raw) => {
+      const req = raw as { filePath?: string };
+      if (req?.filePath) openInPane(req.filePath);
     });
     return off;
-  }, [active, updateTab]);
+  }, [openInPane]);
 
   // Tell the main process which workspaces and editors are open, so the IDE
   // server can answer getWorkspaceFolders / getOpenEditors truthfully.
@@ -587,17 +602,19 @@ export function App() {
                   </div>
                   <div style={S.paneBody}>
                     {spec.kind === "git" ? (
-                      <GitStatusPane cwd={spec.cwd ?? cwdOf(active)} />
+                      <GitStatusPane cwd={spec.cwd ?? cwdOf(active)} onOpen={openInPane} />
                     ) : spec.kind === "editor" ? (
                       <EditorPane
                         key={spec.id}
                         cwd={spec.cwd ?? cwdOf(active)}
                         initialPath={spec.openPath}
+                        initialLine={spec.openLine}
+                        openNonce={spec.openNonce}
                       />
                     ) : spec.kind === "agents" ? (
-                      <AgentsPane cwd={spec.cwd ?? cwdOf(active)} />
+                      <AgentsPane cwd={spec.cwd ?? cwdOf(active)} onOpen={openInPane} />
                     ) : spec.kind === "config" ? (
-                      <ConfigPane cwd={spec.cwd ?? cwdOf(active)} />
+                      <ConfigPane cwd={spec.cwd ?? cwdOf(active)} onOpen={openInPane} />
                     ) : (
                       <TerminalPane
                         paneId={paneId}

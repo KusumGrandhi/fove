@@ -43,7 +43,11 @@ interface SkillInfo {
 
 type View = "agents" | "mcp" | "skills";
 
-export function ConfigPane(props: { cwd: string }) {
+export function ConfigPane(props: {
+  cwd: string;
+  /** Open a file in fove's own editor pane. */
+  onOpen?: (path: string, line?: number) => void;
+}) {
   const [view, setView] = useState<View>("agents");
   const [agents, setAgents] = useState<AgentDef[]>([]);
   const [servers, setServers] = useState<McpServer[]>([]);
@@ -149,9 +153,23 @@ export function ConfigPane(props: { cwd: string }) {
               <div style={S.excerpt}>{active.description || "—"}</div>
               <div style={S.detailLabel}>system prompt</div>
               <div style={S.excerpt}>{active.body.slice(0, 900) || "—"}</div>
-              <button style={S.ghost} onClick={() => window.th.openInEditor(active.path)}>
-                open definition ↗
-              </button>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  style={S.ghost}
+                  onClick={() => props.onOpen?.(active.path)}
+                  disabled={!props.onOpen}
+                >
+                  open definition
+                </button>
+                {/* The escape hatch stays, but is no longer the default. */}
+                <button
+                  style={S.ghost}
+                  title="Open in VS Code"
+                  onClick={() => window.th.openInEditor(active.path)}
+                >
+                  ↗
+                </button>
+              </div>
             </div>
           )}
         </div>

@@ -191,11 +191,12 @@ the surface area is this large, a palette is how you stop hunting for buttons.
 correctly; showing tokens *per turn* rather than cumulative would make an
 expensive prompt obvious immediately.
 
-**f. Those 32 auto-installed agents.** Still unresolved from v0.5: none has
-ever run in 157 sessions, and it is unknown whether their descriptions load
-into the system prompt every session the way skills do. If they do, that is
-context you are paying for and did not choose. Cheap to check, and the config
-pane is already the place to show it.
+**f. Those 32 auto-installed agents.** Deferred to **0.9**, together with the
+equivalent question for skills: does a definition actually load into the system
+prompt every session, and does the thing still work once toggled off? None of
+the 32 has run in 157 sessions, so if their descriptions are loaded, that is
+context paid for and not chosen -- but "existence and working checks" for both
+agents and skills belong in one pass rather than piecemeal.
 
 ---
 

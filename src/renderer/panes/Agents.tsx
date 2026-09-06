@@ -57,7 +57,11 @@ const STATE_COLOR: Record<BgSession["state"], string> = {
   "idle": "#6e7681",
 };
 
-export function AgentsPane(props: { cwd: string }) {
+export function AgentsPane(props: {
+  cwd: string;
+  /** Open a file in fove's own editor pane. */
+  onOpen?: (path: string, line?: number) => void;
+}) {
   const snap = useSnapshot(props.cwd, 2000);
   const bg = useBackgroundSessions(props.cwd);
   const [view, setView] = useState<View>("tree");
@@ -106,7 +110,7 @@ export function AgentsPane(props: { cwd: string }) {
                 key={b.sessionId}
                 style={{ ...S.row, opacity: b.state === "idle" ? 0.55 : 1 }}
                 title={`${b.path}\nclick to open the transcript`}
-                onClick={() => window.th.openInEditor(b.path)}
+                onClick={() => props.onOpen?.(b.path)}
               >
                 <span style={{ color: STATE_COLOR[b.state] }}>●</span>
                 <span style={{ color: C.fg, flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -162,8 +166,8 @@ export function AgentsPane(props: { cwd: string }) {
                     <div
                       key={f}
                       style={S.fileRow}
-                      title={`${f} — click to open in VS Code`}
-                      onClick={() => window.th.openInEditor(f)}
+                      title={`${f} — click to open in the editor`}
+                      onClick={() => props.onOpen?.(f)}
                     >
                       {f.split("/").slice(-2).join("/")}
                     </div>
