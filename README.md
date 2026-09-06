@@ -14,7 +14,7 @@ Under construction. See the plan for milestones.
 - **M1** read-only inspector — parser, agent tree, timeline, session browser ✅
 - **M2** live single session — SDK streaming, permissions, model info ✅
 - **M3** live subagent visualization — tiled AgentGrid ✅ *(the centerpiece)*
-- **M4** config browser
+- **M4** config browser — skills by cost-per-use, memory, MCP ✅
 - **M5** proxy: API inspector + model switching
 
 ## Run

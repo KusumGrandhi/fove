@@ -19,10 +19,15 @@ import { AgentGrid } from "./panes/AgentGrid.tsx";
 import { AgentTreeView } from "./panes/AgentTree.tsx";
 import { Conversation, type Turn } from "./panes/Conversation.tsx";
 import { StatusBar } from "./panes/StatusBar.tsx";
+import { ConfigBrowser, type ConfigTab } from "./panes/ConfigBrowser.tsx";
+import { readClaudeJson } from "./data/config/claudeJson.ts";
+import { listSkills, sortSkills, budget, type SkillSort } from "./data/config/skills.ts";
+import { listMemories, filterMemories } from "./data/config/memory.ts";
+import { readSettings, setSkillOverride, nextOverride } from "./data/config/settingsFile.ts";
 import { C, fit } from "./panes/theme.ts";
 import type { SessionSummary } from "./data/types.ts";
 
-type Screen = "sessions" | "inspect" | "live";
+type Screen = "sessions" | "inspect" | "live" | "config";
 type Pane = "chat" | "grid" | "tree" | "timeline";
 
 /**
@@ -59,6 +64,30 @@ function App() {
   const [phase, setPhase] = createSignal("idle");
   const [tick, setTick] = createSignal(0); // forces re-read of mutable session state
   const [perm, setPerm] = createSignal<PermissionRequest | undefined>();
+
+  // ---- config browser ----------------------------------------------------
+  const [configTab, setConfigTab] = createSignal<ConfigTab>("skills");
+  const [configCursor, setConfigCursor] = createSignal(0);
+  const [skillSort, setSkillSort] = createSignal<SkillSort>("costPerUse");
+  const [configVersion, setConfigVersion] = createSignal(0);
+  const [memQuery, setMemQuery] = createSignal("");
+
+  const [configData] = createResource(configVersion, async () => {
+    const [cj, settings, memories] = await Promise.all([
+      readClaudeJson(),
+      readSettings(),
+      listMemories(),
+    ]);
+    const skills = await listSkills({
+      usage: cj.skillUsage,
+      overrides: (settings.skillOverrides ?? {}) as Record<string, string>,
+    });
+    return { cj, skills, memories };
+  });
+
+  const sortedSkills = () => sortSkills(configData()?.skills ?? [], skillSort());
+  const shownMemories = () => filterMemories(configData()?.memories ?? [], memQuery());
+  const configBudget = () => budget(configData()?.skills ?? []);
 
   const listRows = () => Math.max(3, dims().height - 5);
   const listOffset = () => {
@@ -153,9 +182,41 @@ function App() {
       if (k === "up" || k === "k") setCursor((c) => Math.max(0, c - 1));
       if (k === "q") process.exit(0);
       if (k === "n") { startLive(); return; }
+      if (k === "c") { setScreen("config"); setConfigCursor(0); return; }
       if (k === "return") {
         const s = list[cursor()];
         if (s) { setOpened(s); setAgentCursor(0); setScreen("inspect"); setPane("tree"); }
+      }
+      return;
+    }
+
+    if (screen() === "config") {
+      if (k === "escape" || k === "q") { setScreen("sessions"); return; }
+      if (k === "tab") {
+        setConfigTab((t) => (t === "skills" ? "memory" : t === "memory" ? "mcp" : "skills"));
+        setConfigCursor(0);
+        return;
+      }
+      const listLen =
+        configTab() === "skills" ? sortedSkills().length
+        : configTab() === "memory" ? shownMemories().length
+        : configData()?.cj.mcpServers.length ?? 0;
+      if (k === "down" || k === "j") setConfigCursor((c) => Math.min(listLen - 1, c + 1));
+      if (k === "up" || k === "k") setConfigCursor((c) => Math.max(0, c - 1));
+      if (configTab() === "skills") {
+        if (k === "s") {
+          setSkillSort((v) => (v === "costPerUse" ? "cost" : v === "cost" ? "usage" : v === "usage" ? "name" : "costPerUse"));
+          setConfigCursor(0);
+        }
+        // Space cycles the override and writes settings.json.
+        if (k === "space") {
+          const sk = sortedSkills()[configCursor()];
+          if (sk) {
+            void setSkillOverride(sk.name, nextOverride(sk.override)).then(() =>
+              setConfigVersion((v) => v + 1),
+            );
+          }
+        }
       }
       return;
     }
@@ -202,8 +263,9 @@ function App() {
       const l = live();
       return `LIVE  ${l?.sessionId?.slice(0, 8) ?? "starting…"}  ${process.cwd().replace(/^.*\//, "")}`;
     }
+    if (screen() === "config") return "CONFIG  ·  what shapes Claude's behaviour";
     const s = opened();
-    if (!s) return "M2  ·  ⏎ inspect a session  ·  n new live session";
+    if (!s) return "⏎ inspect · n live session · c config";
     const r = replay();
     if (!r) return `${s.sessionId.slice(0, 8)} · replaying…`;
     const u = r.usage.current;
@@ -224,7 +286,7 @@ function App() {
       <Show when={screen() === "sessions"}>
         <box style={{ flexDirection: "column", width: "100%" }}>
           <text
-            content={fit(`  ${(sessions() ?? []).length} sessions  ·  ↑↓ move · ⏎ inspect · n new live · q quit  [${cursor() + 1}/${(sessions() ?? []).length || 1}]`, dims().width)}
+            content={fit(`  ${(sessions() ?? []).length} sessions  ·  ↑↓ move · ⏎ inspect · n live · c config · q quit  [${cursor() + 1}/${(sessions() ?? []).length || 1}]`, dims().width)}
             style={{ fg: C.dim }}
           />
           <Show when={sessions()} fallback={<text content="  scanning…" style={{ fg: C.dim }} />}>
@@ -286,6 +348,33 @@ function App() {
             <Show when={pane() === "timeline"}>
               <AgentTimeline agents={agents()} windowStart={replay()!.startedAt ?? 0} windowEnd={replay()!.endedAt ?? 1} selectedId={selected()?.id} />
             </Show>
+          </Show>
+        </box>
+      </Show>
+
+      {/* ---- config browser ---- */}
+      <Show when={screen() === "config"}>
+        <box style={{ flexDirection: "column", width: "100%" }}>
+          <text
+            content={fit(
+              `  ${configTab().toUpperCase()}  ·  tab switches${
+                configTab() === "skills" ? `  ·  space toggles  ·  s sort (${skillSort()})` : ""
+              }  ·  esc back`,
+              dims().width,
+            )}
+            style={{ fg: C.dim }}
+          />
+          <Show when={configData()} fallback={<text content="  loading config…" style={{ fg: C.dim }} />}>
+            <ConfigBrowser
+              tab={configTab()}
+              skills={sortedSkills()}
+              memories={shownMemories()}
+              mcp={configData()!.cj.mcpServers}
+              cursor={configCursor()}
+              budgetTokens={configBudget().tokens}
+              enabledCount={configBudget().enabled}
+              query={memQuery()}
+            />
           </Show>
         </box>
       </Show>
