@@ -1,10 +1,49 @@
 # fove
 
-An AI-optimized developer app. Panes hold anything — a shell, a `claude`
-session, and later a diff, a git tree, an editor. Layout is yours: split,
-drag, resize, persist.
+**v0.5**
 
-See [PLAN.md](PLAN.md) for the architecture and phases.
+An AI-optimized developer app. Panes hold anything — a shell, a `claude`
+session, a git surface, an editor, a config browser, an agent tree. Layout is
+yours: split, drag, resize, pin, persist.
+
+Claude Code runs unmodified inside it, and fove registers itself as Claude's
+IDE, so files and diffs it opens land in fove's own editor rather than
+somewhere else.
+
+See [PLAN.md](PLAN.md) for the architecture, [PLAN-v0.5.md](PLAN-v0.5.md) for
+what this release covered, and [PLAN-v0.7.md](PLAN-v0.7.md) for what is next.
+
+## What v0.5 added
+
+- **Git, writable.** Stage, unstage, discard, commit (with amend), stash,
+  push/pull/fetch, blame, and a commit graph laid out from real parent links.
+  Every failure shows git's own stderr — a rejected push or a failing
+  pre-commit hook is exactly the text you need.
+- **IDE integration.** fove advertises itself in `~/.claude/ide/`, so `/ide`
+  lists it and Claude's `openFile`/`openDiff` land here. A diff Claude is
+  blocked on renders as a real Monaco diff with accept/reject, and accepting
+  actually writes the file.
+- **Editor selection reaches Claude.** Select code, ask about "the highlighted
+  part", and it knows what you mean.
+- **Correct token accounting.** The rail follows the session running in *that
+  pane*, found through the process tree — not whichever transcript in the
+  folder was touched last. Output tokens are counted for CLI transcripts,
+  which previously read zero.
+- **Config browser.** Every agent definition fove can see — yours, the
+  project's, and each plugin's — plus MCP servers and skills, with per-skill
+  toggles and the per-session token cost.
+- **Model picker** including OpenRouter, with Anthropic's unsupported-routing
+  notice quoted rather than paraphrased.
+- **Five themes**, switching live without remounting panes (a remount would
+  kill a running `claude`).
+- **Background sessions** — peer `claude` sessions in the same project, which
+  neither the agent tree nor the teammate bar could see.
+- **Packaged as a real macOS app**, with its own icon.
+
+Known gaps, carried into v0.7: the editor cannot create, rename or delete
+files; there is no debugger and no browser pane; per-hunk staging has its
+mechanism but no UI; and drag-and-drop moves panes within a tab but not
+between tabs.
 
 ## Run
 
