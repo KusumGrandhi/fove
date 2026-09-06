@@ -11,7 +11,7 @@ and a browser for the skills/memories/MCP config that shapes Claude's behavior.
 Under construction. See the plan for milestones.
 
 - **M0** scaffold ✅
-- **M1** read-only inspector — transcript parser + agent tree ✅, UI in progress
+- **M1** read-only inspector — parser, agent tree, timeline, session browser ✅
 - **M2** live single session
 - **M3** tabs + live subagent visualization *(the centerpiece)*
 - **M4** config browser
@@ -40,6 +40,16 @@ appears as two disjoint nodes (verified: 181 nodes vs. the correct 91).
 **Cost comes from `modelUsage`, never `usage`.** On a result message, `usage`
 excludes subagent tokens entirely. Per-step `output_tokens` on assistant
 messages is a placeholder that only resolves on the result message.
+
+**OpenTUI does not clip text to its container.** It emits the full string and
+lets the terminal wrap, which collapses a row-based layout. Every row is
+therefore clipped explicitly with `fit()`, and row boxes carry
+`width: "100%"` + `flexShrink: 0` so they do not shrink to content and overlap.
+
+**Bun needs `preload = ["@opentui/solid/preload"]`** in `bunfig.toml`, or
+`render()` dies inside `createRoot`: solid-js's export map lists `node` (the SSR
+stub) ahead of the client build, and neither a `conditions` entry nor
+`--conditions=solid` overrides it.
 
 **`~/.claude.json` is read-only to this app, permanently.** It holds live
 credentials and ~600 keys of server cache; round-tripping it risks dropping
