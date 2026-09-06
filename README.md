@@ -40,6 +40,10 @@ directory, "tab per worktree" and "tab per project" are the same feature: the
 
 The app starts with exactly one workspace, the folder it was launched from.
 
+**Pin a workspace** with its ○ icon, right-click, or `⌘⇧P`. Pinned tabs hold the
+front of the bar in the order pinned, and nothing unpinned can displace them —
+new tabs land after the pinned block, and closing a tab never reorders the rest.
+
 Every shortcut is also a toolbar button, and every pane has its own ✕. The
 panes sit inside a framed workspace rather than filling the window edge to edge.
 
@@ -64,6 +68,7 @@ widgets will live.
 | `⌘S` | save the focused editor |
 | `⌘W` | close pane |
 | `⌘T` | open a folder as a new workspace |
+| `⌘⇧P` | pin / unpin the active workspace |
 | `⌘1..9` | switch tab |
 
 Drag a divider to resize. Click a pane to focus it.

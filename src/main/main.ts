@@ -185,31 +185,41 @@ async function runSmoke(): Promise<void> {
     await sleep(3000);
     const js = (code: string) => win!.webContents.executeJavaScript(code);
     const seq: Record<string, unknown> = {};
+    const tabNames = () =>
+      js(`[...document.querySelectorAll("[title*='/']")].filter(e=>e.tagName==="DIV").map(e=>e.innerText.replace(/\\s+/g," ").trim()).join(" | ")`);
 
     await sleep(3500);
-    // One workspace at startup, named after the launch folder.
-    seq.tabCount = await js(`document.querySelectorAll("[title^='/']").length`);
-    seq.paneCount = await js(`document.querySelectorAll("[data-pane]").length`);
-    seq.statusText = await js(
-      `(document.body.innerText.match(/\\d+ panes?[\\s\\S]{0,80}/)?.[0] ?? "").replace(/\\s+/g," ").slice(0,90)`,
-    );
-    // The workspace directory reaches the panes, not just the label.
-    seq.railHasSession = await js(`!!document.body.innerText.match(/TOKENS[\\s\\S]{0,40}(opus|sonnet|haiku|—)/)`);
-    seq.worktreePicker = await js(`!!document.querySelector("select")`);
-    seq.worktreeOptions = await js(`[...(document.querySelector("select")?.options ?? [])].map(o=>o.text).join("|")`);
+    seq.start = await tabNames();
 
-    // Open the "feature" worktree as its own workspace.
-    await js(`(() => {
+    // Open two more workspaces from the worktree picker.
+    const openWt = (name: string) => js(`(() => {
       const sel = document.querySelector("select");
-      const opt = [...sel.options].find(o => o.text === "feature");
+      const opt = [...sel.options].find(o => o.text === ${JSON.stringify("__NAME__")}.replace("__NAME__", ${JSON.stringify(name)}) || o.text === ${JSON.stringify(name)});
+      if (!opt) return "missing";
       sel.value = opt.value;
       sel.dispatchEvent(new Event("change", { bubbles: true }));
-      return 1;
+      return "ok";
     })()`);
-    await sleep(3000);
-    seq.tabsAfter = await js(`[...document.querySelectorAll("[title^='/']")].map(b=>b.innerText.replace(/\\s+/g," ").trim()).join(" | ")`);
-    seq.statusAfter = await js(
-      `(document.body.innerText.match(/\\d+ panes?[\\s\\S]{0,80}/)?.[0] ?? "").replace(/\\s+/g," ").slice(0,90)`,
+    await openWt("feature"); await sleep(2500);
+    await openWt("second");  await sleep(2500);
+    seq.threeTabs = await tabNames();
+
+    // Pin the LAST tab; it must jump to the front and stay there.
+    seq.pinned = await js(`(() => {
+      const tabs = [...document.querySelectorAll("[title*='/']")].filter(e=>e.tagName==="DIV");
+      const last = tabs[tabs.length - 1];
+      const pin = last.querySelector("button");
+      pin.click();
+      return "clicked";
+    })()`);
+    await sleep(1200);
+    seq.afterPin = await tabNames();
+
+    // Opening another workspace must land AFTER the pinned one.
+    await openWt("feature"); await sleep(2500);
+    seq.afterNewTab = await tabNames();
+    seq.pinnedStillFirst = await js(
+      `[...document.querySelectorAll("[title*='/']")].filter(e=>e.tagName==="DIV")[0]?.innerText.includes("📌")`,
     );
     v.click = seq;
     await sleep(4000);

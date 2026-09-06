@@ -14,6 +14,7 @@ import { EditorPane } from "./panes/Editor.js";
 import { AgentsPane } from "./panes/Agents.js";
 import { AgentsWidget, SkillsWidget, TokensWidget, useSnapshot } from "./ui/widgets.js";
 import { C, Divider, ToolButton } from "./ui/Chrome.js";
+import { close as closeTab, insert as insertTab, setPinned } from "../shared/tabs.js";
 import {
   closePane, isValid, leaf, newId, paneIds, split, type Dir, type Node,
 } from "../shared/layout.js";
@@ -42,6 +43,8 @@ interface Tab {
   cwd: string;
   /** Branch name when the directory is a git worktree, for the tab label. */
   branch?: string;
+  /** Pinned tabs hold the front of the bar and keep their exact position. */
+  pinned?: boolean;
   tree: Node;
   panes: Record<string, PaneSpec>;
   focusedPaneId: string;
@@ -143,7 +146,7 @@ export function App() {
     if (next === null) {
       // Last pane in the tab: close the tab too.
       setTabs((prev) => {
-        const rest = prev.filter((t) => t.id !== active.id);
+        const rest = closeTab(prev, active.id);
         if (rest.length === 0) {
           const t = newTab(active.cwd || appCwd);
           setActiveTabId(t.id);
@@ -172,11 +175,18 @@ export function App() {
       const dir = cwd ?? (await window.th.pickFolder());
       if (!dir) return;
       const t = newTab(dir, "shell", branch);
-      setTabs((prev) => [...prev, t]);
+      setTabs((prev) => insertTab(prev, t));
       setActiveTabId(t.id);
     },
     [],
   );
+
+  const togglePin = useCallback((id: string) => {
+    setTabs((prev) => {
+      const t = prev.find((x) => x.id === id);
+      return t ? setPinned(prev, id, !t.pinned) : prev;
+    });
+  }, []);
 
   /** Worktrees of the active workspace, offered as one-click new tabs. */
   const [worktrees, setWorktrees] = useState<{ path: string; branch?: string }[]>([]);
@@ -202,6 +212,7 @@ export function App() {
       else if (e.key === "g") { e.preventDefault(); doSplit("row", "git"); }
       else if (e.key === "e") { e.preventDefault(); doSplit("row", "editor"); }
       else if (e.key === "r") { e.preventDefault(); doSplit("row", "agents"); }
+      else if (e.key === "p" && e.shiftKey) { e.preventDefault(); togglePin(activeTabId); }
       else if (e.key === "Enter") { e.preventDefault(); doSplit("row", "claude"); }
       else if (/^[1-9]$/.test(e.key)) {
         const i = Number(e.key) - 1;
@@ -210,7 +221,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [doSplit, doClosePane, addTab, tabs]);
+  }, [doSplit, doClosePane, addTab, tabs, togglePin, activeTabId]);
 
   // The rail watches whatever directory the active tab is pointed at. The hook
   // runs unconditionally -- before the `!active` early return -- because hooks
@@ -232,15 +243,24 @@ export function App() {
       <div style={S.titlebar}>
         <div style={S.tabs}>
           {tabs.map((t) => (
-            <button
+            <div
               key={t.id}
               onClick={() => setActiveTabId(t.id)}
+              onContextMenu={(e) => { e.preventDefault(); togglePin(t.id); }}
+              onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); togglePin(t.id); } }}
               style={{ ...S.tab, ...(t.id === activeTabId ? S.tabActive : null) }}
-              title={t.cwd}
+              title={`${t.cwd}\n${t.pinned ? "Pinned — click the pin to unpin" : "Right-click or click the pin to pin"}`}
             >
-              {t.name}
+              <button
+                onClick={(e) => { e.stopPropagation(); togglePin(t.id); }}
+                style={{ ...S.pinBtn, color: t.pinned ? C.accent : C.faint }}
+                title={t.pinned ? "Unpin this workspace" : "Pin this workspace in place"}
+              >
+                {t.pinned ? "📌" : "○"}
+              </button>
+              <span>{t.name}</span>
               {t.branch && <span style={S.tabBranch}>⎇ {t.branch}</span>}
-            </button>
+            </div>
           ))}
           <button onClick={() => void addTab()} style={S.tabAdd} title="Open a folder as a new workspace (⌘T)">+</button>
         </div>
@@ -379,7 +399,7 @@ export function App() {
         <Divider />
         <span style={{ color: C.faint }}>{tabs.length} workspace{tabs.length === 1 ? "" : "s"}</span>
         <div style={S.grow} />
-        <span style={{ color: C.faint }}>drag a pane header to move it</span>
+        <span style={{ color: C.faint }}>⌘⇧P pins a workspace</span>
       </div>
     </div>
   );
@@ -405,12 +425,19 @@ const S: Record<string, React.CSSProperties> = {
   appName: { color: C.faint, fontSize: 11, letterSpacing: 0.3 },
   tabs: { display: "flex", alignItems: "center", gap: 3 },
   tab: {
-    padding: "4px 14px", borderRadius: 6, border: "1px solid transparent",
+    display: "flex", alignItems: "center",
+    padding: "4px 12px", borderRadius: 6, border: "1px solid transparent",
     background: "transparent", color: C.faint, cursor: "pointer", fontSize: 12,
+    userSelect: "none",
     WebkitAppRegion: "no-drag",
   } as React.CSSProperties,
   tabActive: { background: C.chromeHi, color: C.fg, border: `1px solid ${C.accent}` },
   tabBranch: { color: C.faint, fontSize: 10, marginLeft: 6 },
+  pinBtn: {
+    background: "transparent", border: "none", padding: 0, marginRight: 5,
+    cursor: "pointer", fontSize: 9, lineHeight: 1,
+    WebkitAppRegion: "no-drag",
+  } as React.CSSProperties,
   wtSelect: {
     background: "transparent", color: C.dim, border: `1px solid ${C.line}`,
     borderRadius: 6, padding: "3px 6px", fontSize: 11, cursor: "pointer",
