@@ -212,7 +212,14 @@ entry cannot break the plain CLI.
 | §5 themes / animation | **done** — 5 themes, live repaint, reduced-motion respected |
 | §6 OpenRouter | **done** — provider entry, picker UI, verbatim disclaimer |
 
-Deferred as planned: debugger and browser testing to 0.7+, skills UI to 0.9.
+Deferred as planned: debugger and browser testing to 0.7+.
+
+**Skills authoring: not fove's job.** The browser and the on/only/off toggles
+shipped, because seeing 48 unused skills costing ~5.9k tokens a session -- and
+being able to switch them off -- is exactly what the CLI does not give you.
+*Creating* skills is left to Claude Code, which already ships `agent-creator`
+and `skill-reviewer`. Building an authoring UI would violate the rule this
+plan set for itself: only implement what is not already there natively.
 
 Also still open from v0.1: per-hunk staging has its mechanism (`applyPatch`)
 but no UI; drag-and-drop moves panes within a tab but not between tabs.
