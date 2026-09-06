@@ -1,4 +1,4 @@
-# terminal-helper
+# fove
 
 An AI-optimized developer app. Panes hold anything — a shell, a `claude`
 session, and later a diff, a git tree, an editor. Layout is yours: split,

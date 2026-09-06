@@ -275,7 +275,7 @@ export function App() {
           <button onClick={() => void addTab()} style={S.tabAdd} title="Open a folder as a new workspace (⌘T)">+</button>
         </div>
         <div style={S.grow} />
-        <span style={S.appName}>terminal-helper</span>
+        <span style={S.appName}>fove</span>
       </div>
 
       {/* --- toolbar: every shortcut, clickable --- */}
