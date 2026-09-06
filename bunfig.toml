@@ -1,8 +1,0 @@
-# OpenTUI's Solid JSX transform is installed by a Bun preload plugin.
-# Without it, JSX compiles against the wrong runtime and render() fails inside
-# createRoot (Bun resolves solid-js to dist/server.js, the SSR stub, because
-# solid-js's export map lists "node" before the browser/client build).
-preload = ["@opentui/solid/preload"]
-
-[test]
-preload = ["@opentui/solid/preload"]

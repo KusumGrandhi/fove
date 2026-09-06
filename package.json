@@ -2,22 +2,32 @@
   "name": "terminal-helper",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
-  "description": "An IDE-grade terminal wrapper for Claude Code",
+  "description": "An AI-optimized developer app",
+  "main": "dist/main/main/main.js",
   "scripts": {
-    "dev": "bun run src/main.tsx",
-    "start": "bun run src/main.tsx",
-    "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "build": "tsc -p tsconfig.main.json && vite build",
+    "dev": "npm run build && npm start",
+    "start": "cross-env ELECTRON_RUN_AS_NODE= electron .",
+    "postinstall": "electron-rebuild -f -w node-pty",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.261",
-    "@opentui/core": "^0.5.10",
-    "@opentui/solid": "^0.5.10",
-    "solid-js": "^1.9.15"
-  },
-  "devDependencies": {
-    "@types/bun": "latest",
-    "typescript": "^5.7.2"
+    "@electron/rebuild": "^3.7.2",
+    "@types/node": "^26.4.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/xterm": "^6.0.0",
+    "cross-env": "^10.1.0",
+    "electron": "^41.7.1",
+    "node-pty": "^1.1.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
   }
 }
