@@ -100,6 +100,7 @@ export function Workspace(props: WorkspaceProps) {
         return (
           <div
             key={p.paneId}
+            data-pane={p.paneId}
             onMouseDown={() => props.onFocusPane(p.paneId)}
             style={{
               position: "absolute",

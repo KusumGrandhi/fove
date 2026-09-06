@@ -21,6 +21,7 @@ npm run dev          # build + launch
 | `⌘⇧D` | split down |
 | `⌘↵` | split right, running `claude` |
 | `⌘J` | split down, running `claude` |
+| `⌘G` | split right, git status + diff |
 | `⌘W` | close pane |
 | `⌘T` | new tab |
 | `⌘1..9` | switch tab |
@@ -32,9 +33,14 @@ Drag a divider to resize. Click a pane to focus it.
 ```
 app shell      tabs · keymap                 src/renderer/App.tsx
 layout engine  split tree · geometry         src/shared/layout.ts   (pure, tested)
-pane kinds     terminal (shell | claude)     src/renderer/panes/
+pane kinds     terminal · git                src/renderer/panes/
 services       pty · store                   src/main/
 ```
+
+`src/shared/git-parse.ts` is likewise pure string -> data, so every shape git
+can emit (renames, spaces in filenames, unmerged, detached HEAD, binary) is
+tested without a repository. Porcelain v2 with `-z` is used deliberately: it is
+the only form that survives filenames containing spaces or newlines.
 
 `src/shared/layout.ts` is deliberately free of React and Electron: splitting,
 closing, resizing and re-parenting are where an app like this usually breaks,

@@ -16,6 +16,15 @@ const CH = {
   ptyExit: "pty:exit",
   layoutLoad: "layout:load",
   layoutSave: "layout:save",
+  gitStatus: "git:status",
+  gitWorktrees: "git:worktrees",
+  gitDiff: "git:diff",
+  gitUntrackedDiff: "git:untracked-diff",
+  gitLog: "git:log",
+  gitRoot: "git:root",
+  openInEditor: "open:editor",
+  revealInFinder: "open:finder",
+  pickFolder: "dialog:folder",
 } as const;
 
 interface SpawnRequest {
@@ -45,6 +54,20 @@ const api = {
     ipcRenderer.on(CH.ptyExit, h);
     return () => ipcRenderer.removeListener(CH.ptyExit, h);
   },
+
+  gitRoot: (cwd: string): Promise<string | null> => ipcRenderer.invoke(CH.gitRoot, cwd),
+  gitStatus: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.gitStatus, cwd),
+  gitWorktrees: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.gitWorktrees, cwd),
+  gitDiff: (cwd: string, opts: Record<string, unknown> = {}): Promise<unknown[]> =>
+    ipcRenderer.invoke(CH.gitDiff, cwd, opts),
+  gitUntrackedDiff: (cwd: string, path: string): Promise<unknown> =>
+    ipcRenderer.invoke(CH.gitUntrackedDiff, cwd, path),
+  gitLog: (cwd: string, limit?: number): Promise<unknown[]> =>
+    ipcRenderer.invoke(CH.gitLog, cwd, limit),
+  openInEditor: (file: string, line?: number): void =>
+    ipcRenderer.send(CH.openInEditor, file, line),
+  revealInFinder: (file: string): void => ipcRenderer.send(CH.revealInFinder, file),
+  pickFolder: (): Promise<string | null> => ipcRenderer.invoke(CH.pickFolder),
 
   loadLayout: (): Promise<unknown> => ipcRenderer.invoke(CH.layoutLoad),
   saveLayout: (state: unknown): void => ipcRenderer.send(CH.layoutSave, state),

@@ -19,4 +19,13 @@ export const CH = {
   ptyExit: "pty:exit",
   layoutLoad: "layout:load",
   layoutSave: "layout:save",
+  gitStatus: "git:status",
+  gitWorktrees: "git:worktrees",
+  gitDiff: "git:diff",
+  gitUntrackedDiff: "git:untracked-diff",
+  gitLog: "git:log",
+  gitRoot: "git:root",
+  openInEditor: "open:editor",
+  revealInFinder: "open:finder",
+  pickFolder: "dialog:folder",
 } as const;

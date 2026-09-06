@@ -8,7 +8,10 @@
 
 import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { PtyService } from "./pty.js";
+import { GitService } from "./git.js";
+import { openInEditor, revealInFinder } from "./openExternal.js";
 import { loadState, saveState } from "./store.js";
 import { CH, type SpawnRequest } from "../shared/ipc.js";
 
@@ -84,6 +87,26 @@ ipcMain.on(CH.ptyResize, (_e, paneId: string, cols: number, rows: number) =>
 );
 ipcMain.on(CH.ptyKill, (_e, paneId: string) => ptys.kill(paneId));
 
+const gitSvc = new GitService();
+
+ipcMain.handle(CH.gitRoot, (_e, cwd: string) => gitSvc.root(cwd));
+ipcMain.handle(CH.gitStatus, (_e, cwd: string) => gitSvc.status(cwd));
+ipcMain.handle(CH.gitWorktrees, (_e, cwd: string) => gitSvc.worktrees(cwd));
+ipcMain.handle(CH.gitDiff, (_e, cwd: string, opts: Record<string, unknown>) =>
+  gitSvc.diff(cwd, opts as never),
+);
+ipcMain.handle(CH.gitUntrackedDiff, (_e, cwd: string, path: string) =>
+  gitSvc.untrackedDiff(cwd, path),
+);
+ipcMain.handle(CH.gitLog, (_e, cwd: string, limit?: number) => gitSvc.log(cwd, limit));
+ipcMain.on(CH.openInEditor, (_e, file: string, line?: number) => openInEditor(file, line));
+ipcMain.on(CH.revealInFinder, (_e, file: string) => revealInFinder(file));
+ipcMain.handle(CH.pickFolder, async () => {
+  const { dialog } = await import("electron");
+  const r = await dialog.showOpenDialog(win!, { properties: ["openDirectory"] });
+  return r.canceled ? null : r.filePaths[0];
+});
+
 ipcMain.handle(CH.layoutLoad, () => loadState<unknown>(null));
 ipcMain.on(CH.layoutSave, (_e, state: unknown) => saveState(state));
 
@@ -96,69 +119,37 @@ ipcMain.on(CH.layoutSave, (_e, state: unknown) => saveState(state));
 async function runSmoke(): Promise<void> {
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const v: Record<string, unknown> = {};
-  const sessions = () => [...(ptys as unknown as { sessions: Map<string, unknown> }).sessions.keys()];
-  const press = (key: string) =>
-    win!.webContents.executeJavaScript(
-      `window.dispatchEvent(new KeyboardEvent("keydown",{key:${JSON.stringify(key)},metaKey:true,bubbles:true}))`,
-    );
-
+  const repo = process.env.TH_SMOKE_REPO ?? process.cwd();
   try {
-    await sleep(3500);
-    v.pty1 = sessions().length;
+    // --- git service against an isolated fixture repo ---
+    const root = await gitSvc.root(repo);
+    v.root = !!root;
+    const st = await gitSvc.status(repo);
+    v.branch = st?.branch;
+    v.changed = st?.files.length ?? 0;
+    v.rename = st?.files.find((f) => f.from)?.from ?? null;
+    v.worktrees = (await gitSvc.worktrees(repo)).length;
+    const d = await gitSvc.diff(repo);
+    v.diffFiles = d.length;
+    v.hunkLineNumbers = d[0]?.hunks[0]?.lines.some((l) => typeof l.newNo === "number") ?? false;
+    v.untracked = (await gitSvc.untrackedDiff(repo, "untracked.ts"))?.additions ?? 0;
 
-    // Round-trip a command through the first pane.
-    const first = sessions()[0]!;
-    ptys.write(first, "echo TH-SMOKE-$((6*7))\r");
-    await sleep(1500);
-    v.roundTrip = /TH-SMOKE-42/.test(ptys.scrollback(first));
-
-    // Split (cmd+D) -> a second PTY must appear.
-    await press("d");
+    // --- the pane renders inside the real window ---
+    await sleep(3000);
+    await win!.webContents.executeJavaScript(
+      `window.dispatchEvent(new KeyboardEvent("keydown",{key:"g",metaKey:true,bubbles:true}))`,
+    );
     await sleep(2500);
-    v.pty2 = sessions().length;
-    v.splitWorked = sessions().length === 2;
-
-    // Open claude in a pane (cmd+Enter) and wait for its UI to draw.
-    await press("Enter");
-    for (let i = 0; i < 40 && sessions().length < 3; i++) await sleep(250);
-    v.pty3 = sessions().length;
-    const claudeId = sessions()[2];
-    if (claudeId) {
-      let ok = false;
-      let answered = false;
-      for (let i = 0; i < 80; i++) {
-        await sleep(500);
-        const out = ptys.scrollback(claudeId).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "");
-        // Answer the trust prompt once, then give it time to move on.
-        if (!answered && /trust this folder/i.test(out)) {
-          answered = true;
-          ptys.write(claudeId, "\r");
-          await sleep(2500);
-          continue;
-        }
-        if (/Claude Code v|╭─|Welcome to Claude/i.test(out)) { ok = true; break; }
-      }
-      v.claudeRendered = ok;
-      v.claudeBytes = ptys.scrollback(claudeId).length;
-      v.claudeAlive = ptys.has(claudeId);
-      // Can this pty accept input at all?
-      const before = ptys.scrollback(claudeId).length;
-      ptys.write(claudeId, "\r");
-      await sleep(2000);
-      v.grewAfterWrite = ptys.scrollback(claudeId).length - before;
-      const after = ptys.scrollback(claudeId).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "");
-      if (/Claude Code|╭─/.test(after)) ok = true;
-      v.claudeRendered = ok;
-      v.claudeTail = ptys.scrollback(claudeId)
-        .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "")
-        .split(/\r?\n/).filter((l) => l.trim()).slice(-4).map((l) => l.slice(0, 64));
-    }
-
-    // Layout must have been persisted with all three panes.
-    await sleep(800);
-    const saved = loadState<{ tabs?: { tree?: unknown }[] }>({} as never);
-    v.layoutSaved = Array.isArray(saved.tabs) && saved.tabs.length > 0;
-    v.panesPersisted = JSON.stringify(saved).match(/"paneId"/g)?.length ?? 0;
+    v.paneCount = await win!.webContents.executeJavaScript(
+      `document.querySelectorAll('[data-pane]').length`,
+    ).catch(() => -1);
+    v.gitPaneMounted = await win!.webContents.executeJavaScript(
+      `!!document.body.innerText.match(/⎇|worktrees|select a file/i)`,
+    );
+    // xterm draws to canvas, so the terminal pane contributes no innerText;
+    // read the last pane that has any, which is the git pane.
+    const probe = readFileSync(join(__dirname, "../../../scripts/panetext.js"), "utf8");
+    v.gitPaneText = (await win!.webContents.executeJavaScript(probe)) as string;
   } catch (e) {
     v.error = String(e);
   }

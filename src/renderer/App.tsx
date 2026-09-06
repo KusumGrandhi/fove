@@ -9,11 +9,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Workspace } from "./layout/Workspace.js";
 import { TerminalPane } from "./panes/Terminal.js";
+import { GitStatusPane } from "./panes/GitStatus.js";
 import {
   closePane, isValid, leaf, newId, paneIds, split, type Dir, type Node,
 } from "../shared/layout.js";
 
-type PaneKind = "shell" | "claude";
+type PaneKind = "shell" | "claude" | "git";
 
 interface PaneSpec {
   id: string;
@@ -38,7 +39,7 @@ interface Persisted {
 const makePane = (kind: PaneKind, cwd?: string): PaneSpec => ({
   id: newId("p"),
   kind,
-  title: kind === "claude" ? "claude" : "shell",
+  title: kind,
   cwd,
 });
 
@@ -160,6 +161,7 @@ export function App() {
       else if (e.key === "w") { e.preventDefault(); doClosePane(); }
       else if (e.key === "t") { e.preventDefault(); addTab(); }
       else if (e.key === "j") { e.preventDefault(); doSplit("column", "claude"); }
+      else if (e.key === "g") { e.preventDefault(); doSplit("row", "git"); }
       else if (e.key === "Enter") { e.preventDefault(); doSplit("row", "claude"); }
       else if (/^[1-9]$/.test(e.key)) {
         const i = Number(e.key) - 1;
@@ -169,6 +171,10 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [doSplit, doClosePane, addTab, tabs]);
+
+  // Panes inherit the tab's directory; the git pane needs one to look at.
+  const cwdOf = (tab: Tab): string =>
+    tab.panes[tab.focusedPaneId]?.cwd ?? Object.values(tab.panes)[0]?.cwd ?? ".";
 
   if (!active) return <div style={S.boot}>starting…</div>;
 
@@ -187,7 +193,7 @@ export function App() {
         ))}
         <button onClick={addTab} style={S.tabAdd} title="New tab (⌘T)">+</button>
         <div style={S.spacer} />
-        <span style={S.hint}>⌘D split · ⌘⇧D split down · ⌘↵ claude · ⌘W close</span>
+        <span style={S.hint}>⌘D split · ⌘⇧D down · ⌘↵ claude · ⌘G git · ⌘W close</span>
       </div>
 
       <div style={S.body}>
@@ -199,6 +205,9 @@ export function App() {
           renderPane={(paneId, focused) => {
             const spec = active.panes[paneId];
             if (!spec) return null;
+            if (spec.kind === "git") {
+              return <GitStatusPane cwd={spec.cwd ?? cwdOf(active)} />;
+            }
             return (
               <TerminalPane
                 paneId={paneId}
