@@ -15,6 +15,7 @@
 import { AgentTree } from "../data/agentTree.js";
 import { replaySession } from "../data/replay.js";
 import { listSessions, slugForCwd } from "../data/transcript.js";
+import { sessionForPid } from "./sessionLink.js";
 import type { AgentNode, SessionSummary } from "../data/types.js";
 
 export interface SessionSnapshot {
@@ -48,11 +49,36 @@ export class ClaudeSessionService {
   }
 
   /**
+   * The transcript belonging to the Claude session running under `shellPid`.
+   *
+   * Preferred over `newestFor` whenever a pane is available: with more than one
+   * session open on the same directory -- a fove pane and an editor, say --
+   * "newest" is whichever was typed in last, so the rail showed numbers from a
+   * session the user was not looking at.
+   *
+   * Returns null when that pane is not running Claude, which the caller should
+   * report rather than paper over with another session's figures.
+   */
+  async forPane(cwd: string, shellPid: number): Promise<SessionSummary | null> {
+    const sessionId = await sessionForPid(shellPid);
+    if (!sessionId) return null;
+    const sessions = await listSessions({ slug: slugForCwd(cwd) });
+    return sessions.find((s) => s.sessionId === sessionId) ?? null;
+  }
+
+  /**
    * Read and summarise a session. Re-reads only when the file has changed,
    * because replaying an 11MB transcript on every poll would be wasteful.
    */
-  async snapshot(cwd: string): Promise<SessionSnapshot | null> {
-    const summary = await this.newestFor(cwd);
+  async snapshot(cwd: string, shellPid?: number): Promise<SessionSnapshot | null> {
+    // A pane's own session when we can identify it; otherwise the folder's
+    // newest transcript, which is right when only one session is open.
+    // When a pane was named, its own session is the only correct answer:
+    // falling back to the newest transcript would report another session's
+    // numbers under this pane's heading.
+    const summary = shellPid
+      ? await this.forPane(cwd, shellPid)
+      : await this.newestFor(cwd);
     if (!summary) return null;
 
     const cached = this.cache.get(summary.path);

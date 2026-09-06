@@ -116,8 +116,8 @@ const api = {
   fileList: (dir: string): Promise<unknown[]> => ipcRenderer.invoke(CH.fileList, dir),
   filePick: (): Promise<string | null> => ipcRenderer.invoke(CH.filePick),
 
-  claudeSnapshot: (cwd: string): Promise<unknown> =>
-    ipcRenderer.invoke(CH.claudeSnapshot, cwd),
+  claudeSnapshot: (cwd: string, paneId?: string): Promise<unknown> =>
+    ipcRenderer.invoke(CH.claudeSnapshot, cwd, paneId),
   claudeSessions: (): Promise<unknown[]> => ipcRenderer.invoke(CH.claudeSessions),
   skillsList: (): Promise<unknown> => ipcRenderer.invoke(CH.skillsList),
   skillsToggle: (name: string, current?: string): Promise<boolean> =>

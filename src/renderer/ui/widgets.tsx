@@ -44,18 +44,30 @@ export const statusColor = (s: string): string =>
   s === "running" ? "#d29922" : s === "error" ? "#e5534b" : s === "done" ? "#3fb950" : C.faint;
 
 /** Poll the newest Claude session for a directory. */
-export function useSnapshot(cwd: string, intervalMs = 2500): Snapshot | null {
+/**
+ * Watch a Claude session.
+ *
+ * `paneId` identifies the pane whose session to follow. Without it the newest
+ * transcript in the directory is used, which is only correct when a single
+ * session is open -- with an editor and a fove pane both running, that is
+ * whichever was typed in last.
+ */
+export function useSnapshot(
+  cwd: string,
+  intervalMs = 2500,
+  paneId?: string,
+): Snapshot | null {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   useEffect(() => {
     let alive = true;
     const tick = async () => {
-      const s = (await window.th.claudeSnapshot(cwd)) as Snapshot | null;
+      const s = (await window.th.claudeSnapshot(cwd, paneId)) as Snapshot | null;
       if (alive) setSnap(s);
     };
     void tick();
     const t = setInterval(tick, intervalMs);
     return () => { alive = false; clearInterval(t); };
-  }, [cwd, intervalMs]);
+  }, [cwd, intervalMs, paneId]);
   return snap;
 }
 
@@ -82,7 +94,9 @@ export function TokensWidget(props: { snap: Snapshot | null }) {
   return (
     <Widget title="TOKENS" right={<span style={W.badge}>{props.snap?.models[0]?.replace("claude-", "") ?? "—"}</span>}>
       {!t ? (
-        <div style={W.empty}>no session in this folder yet</div>
+        // Says which pane it would follow, so "no numbers" is legible rather
+        // than looking broken.
+        <div style={W.empty}>no claude session in this pane</div>
       ) : (
         <>
           <div style={W.bigNum}>{fmtTokens(total)}</div>
@@ -147,37 +161,6 @@ export function AgentsWidget(props: { snap: Snapshot | null; onSelect?: (id: str
 }
 
 /** Skill context cost: what every session pays for, before you type anything. */
-export function SkillsWidget() {
-  const [data, setData] = useState<{
-    budget: { tokens: number; enabled: number };
-    skills: { name: string; usageCount: number; frontmatterBytes: number }[];
-  } | null>(null);
-
-  useEffect(() => {
-    void (async () => setData((await window.th.skillsList()) as never))();
-  }, []);
-
-  if (!data) return <Widget title="SKILLS"><div style={W.empty}>reading…</div></Widget>;
-  const unused = data.skills.filter((s) => s.usageCount === 0).length;
-
-  return (
-    <Widget title="SKILLS" right={<span style={W.badge}>{data.budget.enabled}</span>}>
-      <div style={W.bigNum}>~{fmtTokens(data.budget.tokens)}</div>
-      <div style={W.note}>tokens of descriptions, every session</div>
-      <Row label="never used" value={String(unused)} dim />
-      {data.skills.slice(0, 4).map((s) => (
-        <div key={s.name} style={W.agentRow} title={`${s.usageCount} lifetime uses`}>
-          <span style={W.agentName}>{s.name}</span>
-          <span style={W.agentTok}>
-            {Math.round(s.frontmatterBytes / 4)}t
-            <span style={{ color: C.faint }}>{s.usageCount === 0 ? " never" : ` ×${s.usageCount}`}</span>
-          </span>
-        </div>
-      ))}
-    </Widget>
-  );
-}
-
 function Row(props: { label: string; value: string; dim?: boolean }) {
   return (
     <div style={W.row}>

@@ -15,7 +15,7 @@ import { AgentsPane } from "./panes/Agents.js";
 import { ConfigPane } from "./panes/Config.js";
 import { DiffView, type DiffRequest } from "./panes/DiffView.js";
 import { ModelPicker, type Provider } from "./ui/ModelPicker.js";
-import { AgentsWidget, SkillsWidget, TokensWidget, useSnapshot } from "./ui/widgets.js";
+import { AgentsWidget, TokensWidget, useSnapshot } from "./ui/widgets.js";
 import { TeammateBar, TeammateView, useTeammates } from "./ui/Teammates.js";
 import { C, Divider, ToolButton } from "./ui/Chrome.js";
 import { THEMES, DEFAULT_THEME, applyTheme } from "./ui/themes.js";
@@ -278,7 +278,22 @@ export function App() {
   // cannot be called conditionally.
   // The rail follows the active workspace.
   const railCwd = active?.cwd || appCwd;
-  const snap = useSnapshot(railCwd, 2500);
+  /**
+   * The rail follows the focused claude pane, falling back to any claude pane
+   * in the tab. Without this it showed whichever transcript in the folder was
+   * touched last -- often an editor's session, not one running in fove.
+   */
+  const railPaneId = (() => {
+    if (!active) return undefined;
+    const focused = active.panes[active.focusedPaneId];
+    if (focused?.kind === "claude") return focused.id;
+    return Object.values(active.panes).find((p) => p.kind === "claude")?.id;
+  })();
+  // With no claude pane in the tab there is nothing to report. Falling back to
+  // the folder's newest transcript is what made the rail show 569.7k for a
+  // session running in someone else's editor.
+  const hasClaudePane = railPaneId !== undefined;
+  const snap = useSnapshot(hasClaudePane ? railCwd : "", 2500, railPaneId);
 
   /**
    * Diffs Claude is blocked on, oldest first. A turn can produce several, and
@@ -606,7 +621,6 @@ export function App() {
           <div style={S.railBody}>
             <TokensWidget snap={snap} />
             <AgentsWidget snap={snap} />
-            <SkillsWidget />
           </div>
         </aside>
       </div>

@@ -31,23 +31,53 @@ interface McpServer {
   scope: "user" | "project";
 }
 
-type View = "agents" | "mcp";
+interface SkillInfo {
+  name: string;
+  path: string;
+  bundle?: string;
+  description?: string;
+  frontmatterBytes: number;
+  usageCount: number;
+  override?: "on" | "off" | "name-only" | "user-invocable-only";
+}
+
+type View = "agents" | "mcp" | "skills";
 
 export function ConfigPane(props: { cwd: string }) {
   const [view, setView] = useState<View>("agents");
   const [agents, setAgents] = useState<AgentDef[]>([]);
   const [servers, setServers] = useState<McpServer[]>([]);
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [budget, setBudget] = useState<{ tokens: number; enabled: number } | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
 
   const load = useCallback(async () => {
-    const [a, m] = await Promise.all([
+    const [a, m, sk] = await Promise.all([
       window.th.agentsList(props.cwd) as Promise<AgentDef[]>,
       window.th.mcpList(props.cwd) as Promise<McpServer[]>,
+      window.th.skillsList() as Promise<{
+        skills: SkillInfo[];
+        budget: { tokens: number; enabled: number };
+      }>,
     ]);
     setAgents(a ?? []);
     setServers(m ?? []);
+    setSkills(sk?.skills ?? []);
+    setBudget(sk?.budget ?? null);
   }, [props.cwd]);
+
+  /**
+   * Cycle a skill: on -> user-invocable-only -> off.
+   *
+   * The middle state is the useful one: the skill stays typeable as /name but
+   * stops spending description tokens on every session and stops competing for
+   * Claude's attention. Writes to ~/.claude/settings.json, never ~/.claude.json.
+   */
+  const toggleSkill = useCallback(async (sk: SkillInfo) => {
+    await window.th.skillsToggle(sk.name, sk.override);
+    await load();
+  }, [load]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -70,6 +100,9 @@ export function ConfigPane(props: { cwd: string }) {
         </button>
         <button style={tab(view === "mcp")} onClick={() => setView("mcp")}>
           mcp {servers.length > 0 ? servers.length : ""}
+        </button>
+        <button style={tab(view === "skills")} onClick={() => setView("skills")}>
+          skills {skills.length > 0 ? skills.length : ""}
         </button>
         <div style={{ flex: 1 }} />
         {view === "agents" && (
@@ -121,6 +154,56 @@ export function ConfigPane(props: { cwd: string }) {
               </button>
             </div>
           )}
+        </div>
+      ) : view === "skills" ? (
+        <div style={S.list}>
+          {budget && (
+            <div style={S.budget}>
+              <b style={{ color: C.fg }}>~{Math.round(budget.tokens / 100) / 10}k tokens</b>
+              {" "}of descriptions load every session · {budget.enabled} enabled
+              {skills.filter((k) => k.usageCount === 0).length > 0 && (
+                <> · <span style={{ color: "#d29922" }}>
+                  {skills.filter((k) => k.usageCount === 0).length} never used
+                </span></>
+              )}
+            </div>
+          )}
+          {skills.length === 0 ? (
+            <div style={S.empty}>no skills found</div>
+          ) : (
+            skills.map((k) => {
+              const state = k.override ?? "on";
+              return (
+                <div key={k.name} style={S.row} title={k.path}>
+                  <button
+                    style={{ ...S.state, ...stateStyle(state) }}
+                    onClick={() => void toggleSkill(k)}
+                    title="on -> user-invocable-only -> off"
+                  >
+                    {state === "on" ? "on" : state === "off" ? "off" : "/only"}
+                  </button>
+                  <span style={S.name}>{k.name}</span>
+                  <span style={S.desc}>{k.description ?? ""}</span>
+                  <span style={{ color: C.faint, fontSize: 10 }}>
+                    {Math.round(k.frontmatterBytes / 4)}t
+                  </span>
+                  <span style={{
+                    color: k.usageCount > 0 ? "#3fb950" : C.faint,
+                    fontSize: 10, minWidth: 46, textAlign: "right",
+                  }}>
+                    {k.usageCount > 0 ? `×${k.usageCount}` : "never"}
+                  </span>
+                </div>
+              );
+            })
+          )}
+          <div style={S.note}>
+            Sorted by cost per use. <b>/only</b> keeps a skill typeable as
+            <code> /name</code> but stops it spending description tokens every
+            session and competing for Claude's attention. Toggles are written to
+            <code> ~/.claude/settings.json</code>, are reversible, and survive
+            upgrades.
+          </div>
         </div>
       ) : (
         <div style={S.list}>
@@ -177,7 +260,23 @@ const sourceStyle = (source: string): React.CSSProperties => ({
   color: source === "user" || source === "project" ? "#3fb950" : "#8b949e",
 });
 
+const stateStyle = (state: string): React.CSSProperties =>
+  state === "on"
+    ? { background: "#12261a", color: "#3fb950", borderColor: "#1d4429" }
+    : state === "off"
+      ? { background: "#2a1214", color: "#f85149", borderColor: "#6e2b30" }
+      : { background: "#2a2418", color: "#d29922", borderColor: "#3d3527" };
+
 const S: Record<string, React.CSSProperties> = {
+  budget: {
+    padding: "7px 9px", margin: "6px 8px", borderRadius: 5,
+    background: "#12121a", border: "1px solid #23232c",
+    color: C.faint, fontSize: 11, lineHeight: 1.5,
+  },
+  state: {
+    minWidth: 44, padding: "1px 6px", borderRadius: 3, border: "1px solid",
+    fontSize: 10, cursor: "pointer", flex: "0 0 auto",
+  },
   pane: {
     display: "flex", flexDirection: "column", height: "100%", background: "#0d0d11",
     color: C.fg, fontFamily: "system-ui", fontSize: 12, overflow: "hidden",

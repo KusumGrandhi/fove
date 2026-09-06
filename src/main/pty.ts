@@ -27,6 +27,8 @@ const DEFAULT_ROWS = 24;
 export interface Session {
   paneId: string;
   proc: IPty;
+  /** The shell's pid, so a pane can be matched to the Claude session inside it. */
+  pid: number;
   /** Everything written so far, capped, for replay on remount. */
   buffer: string;
   cols: number;
@@ -65,6 +67,12 @@ export class PtyService {
     private readonly onData: (paneId: string, data: string) => void,
     private readonly onExit: (paneId: string, code: number) => void,
   ) {}
+
+  /** The shell pid backing a pane, for session identification. */
+  pidOf(paneId: string): number | undefined {
+    const s = this.sessions.get(paneId);
+    return s && !s.exited ? s.pid : undefined;
+  }
 
   /** Default to the user's login shell so their profile and prompt apply. */
   static defaultShell(): string {
@@ -120,6 +128,7 @@ export class PtyService {
     const session: Session = {
       paneId: req.paneId,
       proc,
+      pid: proc.pid,
       buffer: "",
       cols: req.cols,
       rows: req.rows,

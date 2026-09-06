@@ -174,8 +174,11 @@ ipcMain.handle(CH.filePick, async () => {
   return r.canceled ? null : r.filePaths[0];
 });
 
-ipcMain.handle(CH.claudeSnapshot, async (_e, cwd: string) => {
-  const snap = await claudeSvc.snapshot(cwd);
+ipcMain.handle(CH.claudeSnapshot, async (_e, cwd: string, paneId?: string) => {
+  // A pane id lets the snapshot find the session running *in that pane*, rather
+  // than whichever transcript in the folder was touched last.
+  const pid = paneId ? ptys.pidOf(paneId) : undefined;
+  const snap = await claudeSvc.snapshot(cwd, pid);
   return snap ? { ...snap, agents: toWire(snap.agents) } : null;
 });
 ipcMain.handle(CH.claudeSessions, () => listSessions());
