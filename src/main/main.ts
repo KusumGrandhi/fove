@@ -13,6 +13,7 @@ import { PtyService } from "./pty.js";
 import { GitService } from "./git.js";
 import { FileService } from "./files.js";
 import { ClaudeSessionService, toWire } from "./claudeSession.js";
+import { TeamService } from "./teams.js";
 import { readClaudeJson } from "../data/config/claudeJson.js";
 import { listSkills, sortSkills, budget, orphanUsage } from "../data/config/skills.js";
 import { listMemories } from "../data/config/memory.js";
@@ -97,6 +98,7 @@ ipcMain.on(CH.ptyKill, (_e, paneId: string) => ptys.kill(paneId));
 const gitSvc = new GitService();
 const fileSvc = new FileService();
 const claudeSvc = new ClaudeSessionService();
+const teamSvc = new TeamService();
 
 ipcMain.handle(CH.gitRoot, (_e, cwd: string) => gitSvc.root(cwd));
 ipcMain.handle(CH.gitStatus, (_e, cwd: string) => gitSvc.status(cwd));
@@ -152,6 +154,17 @@ ipcMain.handle(CH.skillsToggle, async (_e, name: string, current?: string) => {
 });
 ipcMain.handle(CH.memoryList, () => listMemories());
 
+ipcMain.handle(CH.teamsList, () => teamSvc.list());
+ipcMain.handle(CH.teamCapture, (_e, socket: string, paneId: string, lines?: number) =>
+  teamSvc.capture(socket, paneId, lines),
+);
+ipcMain.handle(CH.teamSend, (_e, socket: string, paneId: string, text: string) =>
+  teamSvc.send(socket, paneId, text),
+);
+ipcMain.handle(CH.teamInterrupt, (_e, socket: string, paneId: string) =>
+  teamSvc.interrupt(socket, paneId),
+);
+
 ipcMain.handle(CH.appCwd, () => process.cwd());
 
 ipcMain.handle(CH.layoutLoad, () => loadState<unknown>(null));
@@ -185,41 +198,42 @@ async function runSmoke(): Promise<void> {
     await sleep(3000);
     const js = (code: string) => win!.webContents.executeJavaScript(code);
     const seq: Record<string, unknown> = {};
-    await sleep(3000);
 
-    // Open an editor pane so Monaco loads and registers its languages.
-    await js(`[...document.querySelectorAll("button")].find(b=>/\\bEditor\\b/.test(b.innerText))?.click(), 1`);
-    await sleep(4000);
+    // --- the service sees the live swarm ---
+    const teams = await teamSvc.list();
+    const t = teams.find((x) => x.socket && x.members.some((m) => m.alive));
+    seq.teamFound = !!t;
+    seq.socket = t?.socket ?? null;
+    seq.liveMembers = (t?.members ?? []).filter((m) => m.alive && m.tmuxPaneId !== "leader").length;
+    if (t?.socket) {
+      const mate = t.members.find((m) => m.alive && m.tmuxPaneId !== "leader");
+      if (mate?.tmuxPaneId) {
+        const out = await teamSvc.capture(t.socket, mate.tmuxPaneId, 40);
+        seq.captureBytes = out.length;
+        seq.captureTail = out.split("\n").filter((l) => l.trim()).slice(-2).map((l) => l.slice(0, 50));
+      }
+    }
 
-    // Ask Monaco's own registry what it supports.
-    seq.langCount = await js(`window.monaco?.languages.getLanguages().length ?? -1`);
-    seq.sample = await js(
-      `(window.monaco?.languages.getLanguages() ?? []).map(l=>l.id).slice(0,40).join(" ")`,
+    // --- the bar appears in the UI, with a tab per teammate ---
+    await sleep(4500);
+    seq.barVisible = await js(`!!document.body.innerText.match(/\\d+ running/)`);
+    seq.tabNames = await js(
+      `[...document.querySelectorAll("button")].map(b=>b.innerText.trim()).filter(t=>/summarizer|explore/i.test(t)).slice(0,6).join(" | ")`,
     );
-    // Spot-check languages a hand-written map would likely miss.
-    seq.checks = await js(`(() => {
-      const langs = window.monaco?.languages.getLanguages() ?? [];
-      const byExt = (ext) => langs.find(l => (l.extensions ?? []).some(e => e.toLowerCase() === ext))?.id ?? null;
-      const byName = (n) => langs.find(l => (l.filenames ?? []).some(f => f.toLowerCase() === n))?.id ?? null;
-      return JSON.stringify({
-        ".rs": byExt(".rs"), ".go": byExt(".go"), ".rb": byExt(".rb"),
-        ".kt": byExt(".kt"), ".swift": byExt(".swift"), ".dart": byExt(".dart"),
-        ".lua": byExt(".lua"), ".r": byExt(".r"), ".pl": byExt(".pl"),
-        ".ex": byExt(".ex"), ".clj": byExt(".clj"), ".hs": byExt(".hs"),
-        ".tf": byExt(".tf"), ".proto": byExt(".proto"), ".vue": byExt(".vue"),
-        dockerfile: byName("dockerfile"),
-      });
+
+    // --- clicking a tab opens the live viewer ---
+    seq.opened = await js(`(() => {
+      const b = [...document.querySelectorAll("button")].find(x => /summarizer/i.test(x.innerText));
+      if (!b) return "no-tab";
+      b.click();
+      return "clicked";
     })()`);
-    // Resolve real paths through the renderer's own function.
-    seq.resolved = await js(`(() => {
-      const f = window.__thLanguageForPath;
-      if (!f) return "not-exposed";
-      const cases = ["a/main.rs","b/app.go","c/x.rb","d/M.kt","e/v.swift","f/w.dart",
-                     "g/s.lua","h/t.R","i/u.pl","j/v.ex","k/w.clj","l/main.hs",
-                     "m/App.vue","n/infra.tf","o/api.proto","p/Dockerfile",
-                     "q/Makefile","r/.env.local","s/notes.md","t/q.sql","u/x.unknownext"];
-      return JSON.stringify(Object.fromEntries(cases.map(c => [c.split("/").pop(), f(c)])));
-    })()`);
+    await sleep(2500);
+    seq.viewerOpen = await js(`!!document.body.innerText.match(/interrupt/)`);
+    seq.viewerHasOutput = await js(
+      `(document.querySelector("pre")?.innerText ?? "").replace(/\\s+/g," ").trim().length`,
+    );
+    seq.hasInput = await js(`!!document.querySelector("input[placeholder*='talk to']")`);
     v.click = seq;
     await sleep(4000);
     v.paneCount = await win!.webContents.executeJavaScript(

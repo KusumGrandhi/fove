@@ -118,6 +118,20 @@ editor renders but every language feature silently does nothing.
 what Monaco does not ship (Vue/Svelte → html, Haskell → fsharp) and the
 extensionless names a registry lookup misses (Makefile, Gemfile, .env, dotfiles).
 
+**Teammates are not subagents.** A Task subagent lives inside one transcript and
+can only be read after the fact. A *teammate* is its own `claude` process in a
+tmux pane, so it can be watched live, interrupted, and talked to. The app joins
+`~/.claude/teams/<team>/config.json` (who exists, their prompt and pane id) with
+the live tmux socket (what they are doing now).
+
+They surface as a sub-tab bar that exists only while a swarm is running — it
+appears when agents start, disappears when the last finishes, and opens nothing
+unless clicked. `capture-pane` reads output; `send-keys` types into the pane.
+
+**tmux does not pass a literal tab through `-F`** — it arrives as `_`, so a
+format string using `\t` silently produces one unsplittable field. Fields use
+a `|:|` separator instead.
+
 **The AI layer reads what Claude Code already writes.** Sessions live in
 `~/.claude/projects/<slug>/*.jsonl`, so the subagent tree, token totals and
 model list need no hooks and no cooperation from the CLI. Subagent logs key on

@@ -38,4 +38,8 @@ export const CH = {
   skillsToggle: "skills:toggle",
   memoryList: "memory:list",
   appCwd: "app:cwd",
+  teamsList: "teams:list",
+  teamCapture: "teams:capture",
+  teamSend: "teams:send",
+  teamInterrupt: "teams:interrupt",
 } as const;

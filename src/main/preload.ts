@@ -35,6 +35,10 @@ const CH = {
   skillsToggle: "skills:toggle",
   memoryList: "memory:list",
   appCwd: "app:cwd",
+  teamsList: "teams:list",
+  teamCapture: "teams:capture",
+  teamSend: "teams:send",
+  teamInterrupt: "teams:interrupt",
 } as const;
 
 interface SpawnRequest {
@@ -92,6 +96,14 @@ const api = {
   skillsToggle: (name: string, current?: string): Promise<boolean> =>
     ipcRenderer.invoke(CH.skillsToggle, name, current),
   memoryList: (): Promise<unknown[]> => ipcRenderer.invoke(CH.memoryList),
+
+  teamsList: (): Promise<unknown[]> => ipcRenderer.invoke(CH.teamsList),
+  teamCapture: (socket: string, paneId: string, lines?: number): Promise<string> =>
+    ipcRenderer.invoke(CH.teamCapture, socket, paneId, lines),
+  teamSend: (socket: string, paneId: string, text: string): Promise<boolean> =>
+    ipcRenderer.invoke(CH.teamSend, socket, paneId, text),
+  teamInterrupt: (socket: string, paneId: string): Promise<boolean> =>
+    ipcRenderer.invoke(CH.teamInterrupt, socket, paneId),
 
   appCwd: (): Promise<string> => ipcRenderer.invoke(CH.appCwd),
 

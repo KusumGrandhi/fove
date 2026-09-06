@@ -13,6 +13,7 @@ import { GitStatusPane } from "./panes/GitStatus.js";
 import { EditorPane } from "./panes/Editor.js";
 import { AgentsPane } from "./panes/Agents.js";
 import { AgentsWidget, SkillsWidget, TokensWidget, useSnapshot } from "./ui/widgets.js";
+import { TeammateBar, TeammateView, useTeammates } from "./ui/Teammates.js";
 import { C, Divider, ToolButton } from "./ui/Chrome.js";
 import { close as closeTab, insert as insertTab, setPinned } from "../shared/tabs.js";
 import {
@@ -230,6 +231,15 @@ export function App() {
   const railCwd = active?.cwd || appCwd;
   const snap = useSnapshot(railCwd, 2500);
 
+  // Live teammates (a tmux swarm). The bar renders nothing when none run.
+  const { team, live } = useTeammates(2500);
+  const [openMateId, setOpenMateId] = useState<string | null>(null);
+  const openMate = live.find((m) => m.agentId === openMateId) ?? null;
+  // A teammate that finishes while open should not leave a dead viewer behind.
+  useEffect(() => {
+    if (openMateId && !openMate) setOpenMateId(null);
+  }, [openMateId, openMate]);
+
   // Panes inherit the tab's directory; the git pane needs one to look at.
   const cwdOf = (tab: Tab): string => tab.cwd || appCwd;
 
@@ -311,6 +321,12 @@ export function App() {
           disabled={paneCount <= 1 && tabs.length <= 1}
         />
       </div>
+
+      {/* --- teammate sub-tabs: present only while a swarm is running --- */}
+      <TeammateBar live={live} openId={openMateId} onOpen={setOpenMateId} />
+      {openMate && team?.socket && (
+        <TeammateView socket={team.socket} mate={openMate} onClose={() => setOpenMateId(null)} />
+      )}
 
       {/* --- the panes live inside this frame, beside the stats rail --- */}
       <div style={S.stage}>
