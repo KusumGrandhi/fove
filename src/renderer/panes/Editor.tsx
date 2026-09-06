@@ -254,6 +254,47 @@ export function EditorPane(props: {
     // openNonce is in the deps so the same path can be reopened on demand.
   }, [props.initialPath, props.initialLine, props.openNonce, openFile]);
 
+  /**
+   * Diagnostics for the active file.
+   *
+   * Monaco checks TypeScript and JavaScript itself, but has no Python language
+   * service at all -- a .py file looked clean no matter what was in it. ruff
+   * fills that gap: fast enough to run on every save, and precise enough to
+   * mark an exact range.
+   */
+  const lint = useCallback(async (path: string) => {
+    const model = modelsRef.current.get(path);
+    if (!model) return;
+    const diags = (await window.th.lintCheck(path, props.cwd)) as {
+      line: number; column: number; endLine: number; endColumn: number;
+      message: string; code?: string; severity: "error" | "warning" | "info";
+    }[];
+    // The model may have been closed while ruff ran.
+    if (model.isDisposed()) return;
+    monaco.editor.setModelMarkers(
+      model,
+      "fove-lint",
+      diags.map((d) => ({
+        startLineNumber: d.line,
+        startColumn: d.column,
+        endLineNumber: d.endLine,
+        endColumn: d.endColumn,
+        message: d.code ? `${d.message} (${d.code})` : d.message,
+        severity:
+          d.severity === "error"
+            ? monaco.MarkerSeverity.Error
+            : d.severity === "warning"
+              ? monaco.MarkerSeverity.Warning
+              : monaco.MarkerSeverity.Info,
+      })),
+    );
+  }, [props.cwd]);
+
+  // Check on open and after every save.
+  useEffect(() => {
+    if (activePath) void lint(activePath);
+  }, [activePath, lint]);
+
   const save = useCallback(async () => {
     const f = files.find((x) => x.path === activePath);
     const model = activePath ? modelsRef.current.get(activePath) : undefined;
@@ -267,6 +308,8 @@ export function EditorPane(props: {
         prev.map((x) => (x.path === f.path ? { ...x, dirty: false, mtimeMs: r.mtimeMs ?? x.mtimeMs } : x)),
       );
       setNotice(`saved ${f.name}`);
+      // Re-check after a save: the diagnostics the user just fixed should go.
+      void lint(f.path);
       setTimeout(() => setNotice(null), 1600);
     } else {
       setNotice(r.conflict ? `${f.name} changed on disk — reopen to merge` : `save failed: ${r.error}`);
@@ -282,6 +325,7 @@ export function EditorPane(props: {
       return rest;
     });
   }, [activePath]);
+
 
   // ---- tree actions -------------------------------------------------------
 

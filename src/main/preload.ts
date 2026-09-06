@@ -59,6 +59,11 @@ const CH = {
   popoutClose: "popout:close",
   popoutList: "popout:list",
   popoutClosed: "popout:closed",
+  searchStart: "search:start",
+  searchCancel: "search:cancel",
+  searchMatch: "search:match",
+  searchDone: "search:done",
+  lintCheck: "lint:check",
   claudeSnapshot: "claude:snapshot",
   claudeSessions: "claude:sessions",
   skillsList: "skills:list",
@@ -168,6 +173,24 @@ const api = {
   /** The pane this window is dedicated to, when it is a popped-out one. */
   popoutPaneId: (): string | null =>
     new URLSearchParams(window.location.search).get("popout"),
+
+  /** Start a search; results stream back via onSearchMatch. */
+  searchStart: (id: string, query: unknown): void =>
+    ipcRenderer.send(CH.searchStart, id, query),
+  searchCancel: (id: string): void => ipcRenderer.send(CH.searchCancel, id),
+  onSearchMatch: (fn: (id: string, matches: unknown[]) => void): (() => void) => {
+    const h = (_e: unknown, id: string, m: unknown[]): void => fn(id, m);
+    ipcRenderer.on(CH.searchMatch, h);
+    return () => { ipcRenderer.removeListener(CH.searchMatch, h); };
+  },
+  onSearchDone: (fn: (id: string, count: number, truncated: boolean) => void): (() => void) => {
+    const h = (_e: unknown, id: string, c: number, t: boolean): void => fn(id, c, t);
+    ipcRenderer.on(CH.searchDone, h);
+    return () => { ipcRenderer.removeListener(CH.searchDone, h); };
+  },
+  /** Diagnostics for one file, for languages Monaco cannot check itself. */
+  lintCheck: (path: string, cwd?: string): Promise<unknown[]> =>
+    ipcRenderer.invoke(CH.lintCheck, path, cwd),
 
   claudeSnapshot: (cwd: string, paneId?: string): Promise<unknown> =>
     ipcRenderer.invoke(CH.claudeSnapshot, cwd, paneId),

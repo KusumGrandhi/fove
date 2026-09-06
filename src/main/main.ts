@@ -44,6 +44,8 @@ import { GitWriteService } from "./gitWrite.js";
 import { FileTreeService } from "./files.js";
 import { WatchService } from "./watch.js";
 import { PopoutService } from "./popout.js";
+import { SearchService } from "./search.js";
+import { LintService } from "./lint.js";
 import {
   loadRecipe, saveRecipe, suggestRecipe, createWorktree, applyRecipe, type Recipe,
 } from "./workspace.js";
@@ -128,6 +130,7 @@ app.on("before-quit", () => {
   ptys.killAll();
   watcher.closeAll();
   popouts.closeAll();
+  searcher.cancelAll();
   // Remove the lock file, so Claude is never offered a dead IDE.
   void ide.stop();
 });
@@ -261,6 +264,19 @@ ipcMain.handle(CH.fsTrash, (_e, path: string) => tree.trash(path));
 ipcMain.on(CH.fsWatch, (_e, dirs: string[]) => watcher.sync(dirs ?? []));
 
 // ---- workspace recipes ----------------------------------------------------
+// ---- search and diagnostics -----------------------------------------------
+const searcher = new SearchService(
+  (id, matches) => send(CH.searchMatch, id, matches),
+  (id, count, truncated) => send(CH.searchDone, id, count, truncated),
+);
+const linter = new LintService();
+
+ipcMain.on(CH.searchStart, (_e, id: string, q: Parameters<SearchService["start"]>[1]) =>
+  searcher.start(id, q),
+);
+ipcMain.on(CH.searchCancel, (_e, id: string) => searcher.cancel(id));
+ipcMain.handle(CH.lintCheck, (_e, path: string, cwd?: string) => linter.check(path, cwd));
+
 // ---- popped-out panes -----------------------------------------------------
 const popouts = new PopoutService((paneId) => send(CH.popoutClosed, paneId));
 

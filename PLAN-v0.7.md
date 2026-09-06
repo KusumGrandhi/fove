@@ -303,8 +303,8 @@ in it.
    that symlinks `.env` and runs setup commands, reporting every step.
 3. ~~**Pop-out panes** (§7)~~ — **done**: a pane opens in its own window and
    attaches to the running PTY, verified by scrollback written before the pop.
-4. **Codebase search + linting** (§6a, §6b) — cheap, and `rg`/`ruff` are
-   already here.
+4. ~~**Codebase search + linting** (§6a, §6b)~~ — **done**: streaming rg
+   search with click-to-open, and ruff diagnostics as Monaco markers.
 5. **Worktree switcher** (§8) — assembly of facts fove already reads.
 6. **Browser pane** (§3) — self-contained, and compounds with the AI layer.
 7. **Debugger, Python only** (§2) — largest; started once the rest is stable.

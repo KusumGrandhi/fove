@@ -13,6 +13,7 @@ import { GitStatusPane } from "./panes/GitStatus.js";
 import { EditorPane } from "./panes/Editor.js";
 import { AgentsPane } from "./panes/Agents.js";
 import { ConfigPane } from "./panes/Config.js";
+import { SearchPane } from "./panes/Search.js";
 import { DiffView, type DiffRequest } from "./panes/DiffView.js";
 import { ModelPicker, type Provider } from "./ui/ModelPicker.js";
 import { AgentsWidget, TokensWidget, useSnapshot } from "./ui/widgets.js";
@@ -25,7 +26,7 @@ import {
   split, type Dir, type Node, type Pins,
 } from "../shared/layout.js";
 
-type PaneKind = "shell" | "claude" | "git" | "editor" | "agents" | "config";
+type PaneKind = "shell" | "claude" | "git" | "editor" | "agents" | "config" | "search";
 
 interface PaneSpec {
   id: string;
@@ -265,6 +266,7 @@ export function App() {
       else if (e.key === "r") { e.preventDefault(); doSplit("row", "agents"); }
       else if (e.key === "m") { e.preventDefault(); setPickerOpen(true); }
       else if (e.key === "k") { e.preventDefault(); doSplit("row", "config"); }
+      else if (e.key === "f" && e.shiftKey) { e.preventDefault(); doSplit("row", "search"); }
       else if (e.key === "p" && e.shiftKey) { e.preventDefault(); togglePin(activeTabId); }
       else if (e.key === "p") { e.preventDefault(); if (active) togglePanePin(active.focusedPaneId); }
       else if (e.key === "Enter") { e.preventDefault(); doSplit("row", "claude"); }
@@ -508,6 +510,7 @@ export function App() {
         <ToolButton label="Editor" hint="⌘E" icon="◧" onClick={() => doSplit("row", "editor")} />
         <ToolButton label="Agents" hint="⌘R" icon="◉" onClick={() => doSplit("row", "agents")} />
         <ToolButton label="Model" hint="⌘M" icon="◈" onClick={() => setPickerOpen(true)} />
+        <ToolButton label="Search" hint="⌘⇧F" icon="⌕" onClick={() => doSplit("row", "search")} />
         <ToolButton label="Config" hint="⌘K" icon="⚙" onClick={() => doSplit("row", "config")} />
         <ToolButton
           label={THEMES.find((t) => t.id === themeId)?.label ?? "Theme"}
@@ -604,6 +607,7 @@ export function App() {
                       {spec.kind === "claude" ? (spec.providerLabel ? `✳ ${spec.providerLabel}` : "✳ claude")
                         : spec.kind === "git" ? "⎇ git"
                         : spec.kind === "editor" ? "◧ editor"
+                        : spec.kind === "search" ? "⌕ search"
                         : spec.kind === "config" ? "⚙ config"
                         : spec.kind === "agents" ? "◉ agents"
                         : "❯ shell"}
@@ -673,6 +677,8 @@ export function App() {
                       <AgentsPane cwd={spec.cwd ?? cwdOf(active)} onOpen={openInPane} />
                     ) : spec.kind === "config" ? (
                       <ConfigPane cwd={spec.cwd ?? cwdOf(active)} onOpen={openInPane} />
+                    ) : spec.kind === "search" ? (
+                      <SearchPane cwd={spec.cwd ?? cwdOf(active)} onOpen={openInPane} />
                     ) : (
                       <TerminalPane
                         paneId={paneId}
