@@ -84,9 +84,30 @@ export class PtyService {
     const existing = this.sessions.get(req.paneId);
     if (existing && !existing.exited) return existing;
 
-    const cmd = req.cmd || PtyService.defaultShell();
-    // A login shell so ~/.zshrc, PATH and the user's prompt are present.
-    const args = req.args ?? (req.cmd ? [] : ["-l"]);
+    const shell = PtyService.defaultShell();
+    let cmd: string;
+    let args: string[];
+    if (req.cmd) {
+      // Run the command *through* the login shell rather than exec'ing it
+      // directly. A bare spawn only sees the PATH this process inherited, which
+      // on macOS omits everything ~/.zshrc adds -- `claude` lives in
+      // /opt/homebrew/bin or ~/.local/bin and would simply not be found, so the
+      // pane died with "[process exited 1]" while typing the same word into a
+      // shell pane worked.
+      //
+      // -l -i -c so both the login profile and the interactive rc file run:
+      // PATH edits commonly live in either. `exec` replaces the shell, so the
+      // pane's process really is the command and signals reach it directly.
+      const quoted = [req.cmd, ...(req.args ?? [])]
+        .map((a) => `'${a.replace(/'/g, `'\\''`)}'`)
+        .join(" ");
+      cmd = shell;
+      args = ["-l", "-i", "-c", `exec ${quoted}`];
+    } else {
+      cmd = shell;
+      // A login shell so ~/.zshrc, PATH and the user's prompt are present.
+      args = req.args ?? ["-l"];
+    }
 
     const proc = pty.spawn(cmd, args, {
       name: "xterm-256color",

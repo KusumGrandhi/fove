@@ -370,7 +370,10 @@ describe("spawn environment", () => {
       const seen = await new Promise<string>((resolve) => {
         let acc = "";
         s.proc.onData((d: string) => { acc += d; });
-        setTimeout(() => resolve(acc), 900);
+        // Commands now run through a login+interactive shell, which sources the
+        // user's whole profile before exec'ing -- slower to first output than a
+        // bare spawn.
+        setTimeout(() => resolve(acc), 3000);
       });
       svc.kill("envtest");
 
@@ -387,5 +390,46 @@ describe("spawn environment", () => {
       delete process.env.CLAUDE_CODE_ENTRYPOINT;
       delete process.env.CLAUDECODE;
     }
+  });
+});
+
+describe("pane commands resolve through the login shell", () => {
+  test("a command only on the interactive PATH is found", async () => {
+    const { PtyService } = await import("../src/main/pty.js");
+    const svc = new PtyService(() => {}, () => {});
+    // `claude` lives in /opt/homebrew/bin or ~/.local/bin -- paths added by
+    // ~/.zshrc, not present in the PATH this process inherited. A bare spawn
+    // would exit 1; going through the login shell finds it.
+    const s = svc.spawn({
+      paneId: "shellresolve",
+      cmd: "sh",
+      args: ["-c", "command -v claude >/dev/null && echo FOUND || echo MISSING"],
+      cols: 80, rows: 24,
+    });
+    const out = await new Promise<string>((resolve) => {
+      let acc = "";
+      s.proc.onData((d: string) => { acc += d; });
+      setTimeout(() => resolve(acc), 2500);
+    });
+    svc.kill("shellresolve");
+    expect(out).toContain("FOUND");
+  });
+
+  test("arguments survive quoting, including spaces", async () => {
+    const { PtyService } = await import("../src/main/pty.js");
+    const svc = new PtyService(() => {}, () => {});
+    const s = svc.spawn({
+      paneId: "quoting",
+      cmd: "echo",
+      args: ["one two", "three"],
+      cols: 80, rows: 24,
+    });
+    const out = await new Promise<string>((resolve) => {
+      let acc = "";
+      s.proc.onData((d: string) => { acc += d; });
+      setTimeout(() => resolve(acc), 2000);
+    });
+    svc.kill("quoting");
+    expect(out).toContain("one two three");
   });
 });
