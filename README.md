@@ -13,6 +13,37 @@ npm install          # postinstall rebuilds node-pty for Electron's ABI
 npm run dev          # build + launch
 ```
 
+## Install as an app
+
+```bash
+npm run install:local   # build, sign ad-hoc, copy to /Applications
+npm run approve:local   # ONCE: tell Gatekeeper this app is allowed (needs sudo)
+```
+
+Then open fove from Spotlight or the Applications folder like any other app.
+`npm run dist` additionally produces `release/fove-<version>-arm64.dmg`.
+
+**Why the extra approval step.** The app is signed ad-hoc, not with a paid
+Apple Developer ID. Running the binary directly always works, but launching it
+by double-click goes through launchd, which asks Gatekeeper first -- and
+Gatekeeper rejects anything without a Developer ID. `approve:local` registers a
+local exception; a downloaded copy on someone else's machine would need
+right-click -> Open, or a real signing identity.
+
+Two packaging traps already paid for:
+
+- **`ELECTRON_RUN_AS_NODE` in the user's login environment.** With it set,
+  Electron runs `main.js` as plain Node and exits silently -- no window, no
+  error. `npm start` clears it, but a double-clicked `.app` inherits it, so
+  `main.ts` re-execs itself without the variable before importing electron.
+  The re-exec must pass the app root explicitly: in a packaged app `argv` is
+  just `[binary]`, so relaunching with the arguments alone starts Electron with
+  nothing to run.
+- **`node-pty` cannot load from inside an asar.** It ships a `.node` binary and
+  a separate `spawn-helper` executable, so it is listed in `asarUnpack`.
+  Everything else is bundled by Vite and excluded from `node_modules`, which
+  took the archive from 117MB to 15MB (`monaco-editor` alone was 2,325 files).
+
 ## UI
 
 ```

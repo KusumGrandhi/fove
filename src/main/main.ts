@@ -3,8 +3,32 @@
  *
  * Note: this app must NOT run with ELECTRON_RUN_AS_NODE set -- with it, Electron
  * executes this file as plain Node, `require("electron")` returns a path string,
- * and `app` is undefined. The npm start script clears it.
+ * and `app` is undefined. `npm start` clears it, but a double-clicked .app
+ * inherits the user's login environment, so the app re-launches itself without
+ * the variable rather than dying silently (see below).
  */
+
+// This runs before anything imports electron: with ELECTRON_RUN_AS_NODE set,
+// `require("electron")` yields a path string and every electron API is
+// undefined, so the process must be replaced before that import happens.
+if (process.env.ELECTRON_RUN_AS_NODE) {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  // Electron needs an app path as its first argument. In a packaged app argv is
+  // just [binary] (plus any flags), so relaunching with the flags alone would
+  // start Electron with nothing to run. Pass the app root explicitly unless
+  // argv already names one -- flags, which begin with "-", never do.
+  const args = process.argv.slice(1);
+  const hasAppPath = args.some((a) => !a.startsWith("-"));
+  const appRoot = require("node:path").join(__dirname, "..", "..", "..") as string;
+  const r = spawnSync(process.execPath, hasAppPath ? args : [appRoot, ...args], {
+    env,
+    stdio: "inherit",
+  });
+  process.exit(r.status ?? 0);
+}
 
 import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "node:path";

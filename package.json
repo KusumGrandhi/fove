@@ -10,25 +10,84 @@
     "start": "cross-env ELECTRON_RUN_AS_NODE= electron .",
     "postinstall": "electron-rebuild -f -w node-pty",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "sign:adhoc": "codesign --force --deep --sign - release/mac-arm64/fove.app && codesign -dv release/mac-arm64/fove.app",
+    "install:local": "npm run pack && codesign --force --deep --sign - release/mac-arm64/fove.app && rm -rf /Applications/fove.app && cp -R release/mac-arm64/fove.app /Applications/ && codesign --force --deep --sign - /Applications/fove.app && echo 'Installed. Run: npm run approve:local  (once, for double-click launch)'",
+    "approve:local": "sudo spctl --add --label fove /Applications/fove.app && sudo spctl --enable --label fove && spctl -a -t exec -vv /Applications/fove.app"
   },
   "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/xterm": "^6.0.0",
+    "monaco-editor": "^0.56.0",
+    "node-pty": "^1.1.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
     "@electron/rebuild": "^3.7.2",
     "@types/node": "^26.4.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/addon-webgl": "^0.19.0",
-    "@xterm/xterm": "^6.0.0",
     "cross-env": "^10.1.0",
     "electron": "^41.7.1",
-    "monaco-editor": "^0.56.0",
-    "node-pty": "^1.1.0",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
+    "electron-builder": "^26.15.3",
     "typescript": "^7.0.2",
     "vite": "^8.2.2",
     "vitest": "^4.1.11"
+  },
+  "build": {
+    "appId": "dev.fove.app",
+    "productName": "fove",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json",
+      "!**/*.map",
+      "!**/*.ts",
+      "!node_modules/**/*",
+      "node_modules/node-pty/**/*",
+      "node_modules/node-addon-api/**/*"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/node-pty/**"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "darkModeSupport": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSAppleEventsUsageDescription": "fove opens files in your editor.",
+        "LSMinimumSystemVersion": "11.0"
+      },
+      "identity": null,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "fove ${version}"
+    }
   }
 }
