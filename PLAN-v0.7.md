@@ -10,6 +10,18 @@ and have to hand-wire a worktree before it runs.
 Grounded against the actual `core` setup rather than assumed — findings marked
 **[verified]** were checked on this machine.
 
+**Decided, not to be re-litigated:**
+
+1. **Build order is friction-first:** editor basics → worktree recipes →
+   browser → debugger. The first two are small and remove daily annoyance
+   immediately; the debugger goes last because it is the one item that can
+   swallow a release, and it is safest to start once everything around it is
+   stable.
+2. **The debugger is Python-only.** `core` is Flask, so `debugpy` covers the
+   code actually stepped through. Node is deferred: it needs either a CDP
+   bridge or `vscode-js-debug` as an adapter, roughly doubling the transport
+   work for the language debugged less here.
+
 ---
 
 ## 0. Already works — do not build
@@ -66,15 +78,17 @@ on this list. **Do this first.**
 
 The largest item. Scope it or it swallows the release.
 
-**Recommendation: Python first, Node second, nothing else.** `core` is Flask —
-that is the code you actually debug. **[verified: `debugpy` is not installed;
-it is a `pip install` away.]**
+**Decided: Python only in v0.7.** `core` is Flask — that is the code you
+actually debug. **[verified: `debugpy` is not installed; it is a `pip install`
+away.]** Node is deferred to a later round for the reason given above.
 
-**Protocol.** Both languages speak DAP (Debug Adapter Protocol), the same wire
-format VS Code uses:
-- Python → `debugpy`, launched as `python -m debugpy --listen <port> --wait-for-client`
-- Node → the built-in inspector (`node --inspect-brk`), which speaks CDP; either
-  bridge it or use `vscode-js-debug` as an adapter.
+**Protocol.** Python speaks DAP (Debug Adapter Protocol), the same wire format
+VS Code uses: `debugpy`, launched as
+`python -m debugpy --listen <port> --wait-for-client`.
+
+(Node, when it comes, speaks CDP through its built-in inspector
+(`node --inspect-brk`) and needs either a bridge or `vscode-js-debug` as an
+adapter — which is exactly why it is not in this round.)
 
 DAP is JSON-RPC over a length-prefixed stream — the same shape as the IDE
 protocol already implemented in `ide.ts`, so the transport work is understood.
@@ -200,13 +214,17 @@ agents and skills belong in one pass rather than piecemeal.
 
 ---
 
-## Suggested order
+## Order (decided)
 
 1. **Editor basics** (§1) — smallest, most daily friction removed.
 2. **Workspace recipes** (§4) — small, and the evidence is already on disk.
 3. **Browser pane** (§3) — self-contained, and compounds with the AI layer.
-4. **Debugger** (§2) — largest; do it when the rest is stable.
+4. **Debugger, Python only** (§2) — largest; started once the rest is stable.
 5. Pick from §5 as they prove useful.
+
+A checkpoint worth taking: after §1 and §2 land, use fove for a real day on
+`core` before starting the debugger. The remaining order should be confirmed by
+what actually hurts, not by this document.
 
 Carried forward, still true:
 - Never test against real repos; disposable fixtures only.
