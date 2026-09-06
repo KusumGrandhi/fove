@@ -12,7 +12,7 @@ Under construction. See the plan for milestones.
 
 - **M0** scaffold ✅
 - **M1** read-only inspector — parser, agent tree, timeline, session browser ✅
-- **M2** live single session
+- **M2** live single session — SDK streaming, permissions, model info ✅
 - **M3** tabs + live subagent visualization *(the centerpiece)*
 - **M4** config browser
 - **M5** proxy: API inspector + model switching
@@ -50,6 +50,18 @@ therefore clipped explicitly with `fit()`, and row boxes carry
 `render()` dies inside `createRoot`: solid-js's export map lists `node` (the SSR
 stub) ahead of the client build, and neither a `conditions` entry nor
 `--conditions=solid` overrides it.
+
+**Debug logging must go to a file, not `console.*`.** OpenTUI restores the
+terminal on exit, which swallows anything written to stdout/stderr from inside
+the render loop. A `console.error` that never appears is not proof the code
+did not run -- append to a file instead. (This cost an hour of chasing a
+non-existent SDK stall.)
+
+**In streaming-input mode the SDK emits nothing until the first prompt is
+queued** -- not even `system/init`. So `sessionId`, `model`, `apiKeySource` and
+the tool list are unknown until the user's first turn; the UI renders an
+"unknown" state rather than blocking on init. `LiveSession.ready` resolves when
+init lands.
 
 **`~/.claude.json` is read-only to this app, permanently.** It holds live
 credentials and ~600 keys of server cache; round-tripping it risks dropping

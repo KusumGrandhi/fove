@@ -1,23 +1,28 @@
 /**
- * terminal-helper -- M1: read-only session inspector.
+ * terminal-helper -- an IDE-grade wrapper for Claude Code.
  *
- * Enumerates the Claude Code sessions already on disk, replays one into an
- * AgentTree, and renders the subagent tree and execution timeline. No SDK, no
- * live query: this validates the DAG and cost logic against real transcripts
- * before anything drives a live session.
+ * Two modes over one shared model:
+ *   LIVE     drives a session through the Agent SDK (M2)
+ *   INSPECT  replays a session already on disk (M1)
+ *
+ * Both produce an AgentTree, so the tree/timeline renderers serve either.
  */
 
 import { render, useKeyboard, useTerminalDimensions } from "@opentui/solid";
-import { createResource, createSignal, Show, For } from "solid-js";
+import { createResource, createSignal, For, Show } from "solid-js";
 import { listSessions } from "./data/transcript.ts";
 import { replaySession } from "./data/replay.ts";
-import { formatDuration, formatTokens } from "./data/usage.ts";
+import { emptyTotals, formatTokens } from "./data/usage.ts";
+import { LiveSession, type PermissionRequest } from "./core/session.ts";
 import { AgentTimeline } from "./panes/AgentTimeline.tsx";
 import { AgentTreeView } from "./panes/AgentTree.tsx";
+import { Conversation, type Turn } from "./panes/Conversation.tsx";
+import { StatusBar } from "./panes/StatusBar.tsx";
 import { C, fit } from "./panes/theme.ts";
 import type { SessionSummary } from "./data/types.ts";
 
-type View = "sessions" | "tree" | "timeline";
+type Screen = "sessions" | "inspect" | "live";
+type Pane = "chat" | "tree" | "timeline";
 
 /**
  * OpenTUI queries the terminal directly and ignores COLUMNS/LINES, reporting a
@@ -36,17 +41,25 @@ function useDims() {
 
 function App() {
   const dims = useDims();
+  const [screen, setScreen] = createSignal<Screen>("sessions");
+  const [pane, setPane] = createSignal<Pane>("chat");
+
+  // ---- inspect mode -------------------------------------------------------
   const [sessions] = createResource(() => listSessions());
   const [cursor, setCursor] = createSignal(0);
   const [opened, setOpened] = createSignal<SessionSummary | undefined>();
-  const [view, setView] = createSignal<View>("sessions");
+  const [replay] = createResource(opened, (s) => replaySession(s));
   const [agentCursor, setAgentCursor] = createSignal(0);
 
-  const [replay] = createResource(opened, (s) => replaySession(s));
+  // ---- live mode ----------------------------------------------------------
+  const [live, setLive] = createSignal<LiveSession | undefined>();
+  const [turns, setTurns] = createSignal<Turn[]>([]);
+  const [draft, setDraft] = createSignal("");
+  const [phase, setPhase] = createSignal("idle");
+  const [tick, setTick] = createSignal(0); // forces re-read of mutable session state
+  const [perm, setPerm] = createSignal<PermissionRequest | undefined>();
 
-  /** Rows that fit below the header and hint line. */
   const listRows = () => Math.max(3, dims().height - 5);
-  /** Scroll the window so the cursor stays visible. */
   const listOffset = () => {
     const n = (sessions() ?? []).length;
     const rows = listRows();
@@ -56,9 +69,130 @@ function App() {
   const visibleSessions = () =>
     (sessions() ?? []).slice(listOffset(), listOffset() + listRows());
 
-  const headerInfo = () => {
+  const agents = () => {
+    tick();
+    const l = live();
+    if (screen() === "live" && l) return l.tree.ordered().filter((n) => n.id !== "root");
+    const r = replay();
+    return r ? r.tree.ordered().filter((n) => n.id !== "root") : [];
+  };
+  const selected = () => agents()[agentCursor()];
+  const usage = () => {
+    tick();
+    const l = live();
+    if (screen() === "live" && l) return l.usage.current;
+    return replay()?.usage.current ?? emptyTotals();
+  };
+
+  function startLive() {
+    const s = new LiveSession(
+      { cwd: process.cwd() },
+      {
+        onPhase: (p) => { setPhase(p); setTick((t) => t + 1); },
+        onPermission: (r) => setPerm(r),
+        onError: (e) => setTurns((t) => [...t, { role: "system", text: `error: ${e}` }]),
+        onMessage: (m) => {
+          setTick((t) => t + 1);
+          if (m.type === "assistant") {
+            const blocks = (m as { message?: { content?: unknown[] } }).message?.content ?? [];
+            const agent = (m as { parent_tool_use_id?: string | null }).parent_tool_use_id;
+            for (const b of blocks as { type: string; text?: string; name?: string }[]) {
+              if (b.type === "text" && b.text?.trim()) {
+                setTurns((t) => [...t, {
+                  role: "assistant", text: b.text!.trim(),
+                  agent: agent ? shortAgent(agent) : undefined,
+                }]);
+              } else if (b.type === "tool_use") {
+                setTurns((t) => [...t, {
+                  role: "tool", text: b.name ?? "tool",
+                  agent: agent ? shortAgent(agent) : undefined,
+                }]);
+              }
+            }
+          }
+        },
+      },
+    );
+    s.start();
+    setLive(s);
+    setScreen("live");
+    setPane("chat");
+  }
+
+  const shortAgent = (id: string) => {
+    const n = live()?.tree.nodes.get(id);
+    return n ? (n.label ?? n.name).slice(0, 18) : id.slice(0, 8);
+  };
+
+  function submit() {
+    const text = draft().trim();
+    if (!text) return;
+    setTurns((t) => [...t, { role: "user", text }]);
+    live()?.send(text);
+    setDraft("");
+  }
+
+  useKeyboard((key) => {
+    const k = key.name;
+    const ctrl = key.ctrl;
+
+    // Permission prompt takes precedence over everything.
+    const p = perm();
+    if (p) {
+      if (k === "y" || k === "return") { p.resolve(true); setPerm(undefined); }
+      if (k === "n" || k === "escape") { p.resolve(false); setPerm(undefined); }
+      return;
+    }
+
+    if (ctrl && k === "c") { void live()?.stop(); process.exit(0); }
+
+    if (screen() === "sessions") {
+      const list = sessions() ?? [];
+      if (k === "down" || k === "j") setCursor((c) => Math.min(list.length - 1, c + 1));
+      if (k === "up" || k === "k") setCursor((c) => Math.max(0, c - 1));
+      if (k === "q") process.exit(0);
+      if (k === "n") { startLive(); return; }
+      if (k === "return") {
+        const s = list[cursor()];
+        if (s) { setOpened(s); setAgentCursor(0); setScreen("inspect"); setPane("tree"); }
+      }
+      return;
+    }
+
+    if (screen() === "live") {
+      if (ctrl && k === "t") { setPane((v) => (v === "chat" ? "tree" : v === "tree" ? "timeline" : "chat")); return; }
+      if (k === "escape") { void live()?.interrupt(); return; }
+      if (pane() === "chat") {
+        if (k === "return") { submit(); return; }
+        if (k === "backspace") { setDraft((d) => d.slice(0, -1)); return; }
+        if (key.sequence && key.sequence.length === 1 && !ctrl) {
+          setDraft((d) => d + key.sequence);
+        }
+        return;
+      }
+      const n = agents().length;
+      if (k === "down" || k === "j") setAgentCursor((c) => Math.min(n - 1, c + 1));
+      if (k === "up" || k === "k") setAgentCursor((c) => Math.max(0, c - 1));
+      return;
+    }
+
+    // inspect
+    if (k === "escape") { setScreen("sessions"); return; }
+    if (k === "q") process.exit(0);
+    if (k === "tab") { setPane((v) => (v === "tree" ? "timeline" : "tree")); return; }
+    const n = agents().length;
+    if (k === "down" || k === "j") setAgentCursor((c) => Math.min(n - 1, c + 1));
+    if (k === "up" || k === "k") setAgentCursor((c) => Math.max(0, c - 1));
+  });
+
+  const header = () => {
+    if (screen() === "live") {
+      tick();
+      const l = live();
+      return `LIVE  ${l?.sessionId?.slice(0, 8) ?? "starting…"}  ${process.cwd().replace(/^.*\//, "")}`;
+    }
     const s = opened();
-    if (!s) return "M1 inspector";
+    if (!s) return "M2  ·  ⏎ inspect a session  ·  n new live session";
     const r = replay();
     if (!r) return `${s.sessionId.slice(0, 8)} · replaying…`;
     const u = r.usage.current;
@@ -66,124 +200,101 @@ function App() {
     return `${s.sessionId.slice(0, 8)} · ${agents().length} agents · ${tok} tok · ${r.stats.parsed}/${r.stats.total} lines in ${r.elapsedMs}ms`;
   };
 
-  const agents = () => {
-    const r = replay();
-    if (!r) return [];
-    return r.tree.ordered().filter((n) => n.id !== "root");
-  };
-  const selected = () => agents()[agentCursor()];
-
-  useKeyboard((key) => {
-    const name = key.name;
-    if (name === "q" || (key.ctrl && name === "c")) process.exit(0);
-
-    if (view() === "sessions") {
-      const list = sessions() ?? [];
-      if (name === "down" || name === "j") setCursor((c) => Math.min(list.length - 1, c + 1));
-      if (name === "up" || name === "k") setCursor((c) => Math.max(0, c - 1));
-      if (name === "return") {
-        const s = list[cursor()];
-        if (s) { setOpened(s); setAgentCursor(0); setView("tree"); }
-      }
-      return;
-    }
-
-    // Inside a session.
-    if (name === "escape") { setView("sessions"); return; }
-    if (name === "tab") { setView((v) => (v === "tree" ? "timeline" : "tree")); return; }
-    const n = agents().length;
-    if (name === "down" || name === "j") setAgentCursor((c) => Math.min(n - 1, c + 1));
-    if (name === "up" || name === "k") setAgentCursor((c) => Math.max(0, c - 1));
-  });
+  const bodyRows = () => Math.max(3, dims().height - 6);
 
   return (
     <box style={{ flexDirection: "column", width: "100%", height: "100%", backgroundColor: C.bg }}>
-      {/* Header -- one clipped line; OpenTUI will not clip it for us. */}
       <box style={{ flexDirection: "row", width: "100%", flexShrink: 0, backgroundColor: C.bgAlt }}>
         <text content=" terminal-helper " style={{ fg: C.accent, flexShrink: 0 }} />
-        <text content={fit(headerInfo(), Math.max(0, dims().width - 17))} style={{ fg: C.dim, flexShrink: 0 }} />
+        <text content={fit(header(), Math.max(0, dims().width - 17))} style={{ fg: C.dim, flexShrink: 0 }} />
       </box>
 
-      {/* Body */}
-      <Show
-        when={view() !== "sessions"}
-        fallback={
-          <box style={{ flexDirection: "column", paddingTop: 1 }}>
-            <text
-              content={fit(
-                `  ${(sessions() ?? []).length} sessions  ·  ↑↓ move · ⏎ open · q quit${
-                  (sessions() ?? []).length ? `   [${cursor() + 1}/${(sessions() ?? []).length}]` : ""
-                }`,
-                dims().width,
-              )}
-              style={{ fg: C.dim }}
-            />
-            <Show when={sessions()} fallback={<text content="  scanning…" style={{ fg: C.dim }} />}>
-              <For each={visibleSessions()}>
-                {(s, i) => {
-                  const sel = () => i() + listOffset() === cursor();
-                  return (
-                    <box style={{ flexDirection: "row", width: "100%", flexShrink: 0, backgroundColor: sel() ? C.selBg : undefined }}>
-                      <text content={`  ${s.sessionId.slice(0, 8)} `} style={{ fg: sel() ? C.fg : C.dim, flexShrink: 0 }} />
-                      <text content={`${(s.sizeBytes / 1e6).toFixed(1).padStart(6)}MB  `} style={{ fg: C.faint, flexShrink: 0 }} />
-                      <text
-                        content={fit(s.projectSlug.replace(/^-Users-[^-]+-/, ""), Math.max(0, dims().width - 20))}
-                        style={{ fg: sel() ? C.accent : C.dim, flexShrink: 0 }}
-                      />
-                    </box>
-                  );
-                }}
-              </For>
-            </Show>
-          </box>
-        }
-      >
-        <box style={{ flexDirection: "column", paddingTop: 1 }}>
-          <Show when={replay()} fallback={<text content="  replaying…" style={{ fg: C.dim }} />}>
-            <text
-              content={`  ${view() === "tree" ? "TREE" : "TIMELINE"}  (tab switches · esc back · ↑↓ select)`}
-              style={{ fg: C.dim }}
-            />
-            <Show when={view() === "tree"}>
-              <AgentTreeView agents={agents()} selectedId={selected()?.id} width={dims().width} />
-            </Show>
-            <Show when={view() === "timeline"}>
-              <AgentTimeline
-                agents={agents()}
-                windowStart={replay()!.startedAt ?? 0}
-                windowEnd={replay()!.endedAt ?? 1}
-                width={dims().width}
-                selectedId={selected()?.id}
-              />
-            </Show>
+      {/* ---- session picker ---- */}
+      <Show when={screen() === "sessions"}>
+        <box style={{ flexDirection: "column", width: "100%" }}>
+          <text
+            content={fit(`  ${(sessions() ?? []).length} sessions  ·  ↑↓ move · ⏎ inspect · n new live · q quit  [${cursor() + 1}/${(sessions() ?? []).length || 1}]`, dims().width)}
+            style={{ fg: C.dim }}
+          />
+          <Show when={sessions()} fallback={<text content="  scanning…" style={{ fg: C.dim }} />}>
+            <For each={visibleSessions()}>
+              {(s, i) => {
+                const sel = () => i() + listOffset() === cursor();
+                return (
+                  <box style={{ flexDirection: "row", width: "100%", flexShrink: 0, backgroundColor: sel() ? C.selBg : undefined }}>
+                    <text content={`  ${s.sessionId.slice(0, 8)} `} style={{ fg: sel() ? C.fg : C.dim, flexShrink: 0 }} />
+                    <text content={`${(s.sizeBytes / 1e6).toFixed(1).padStart(6)}MB  `} style={{ fg: C.faint, flexShrink: 0 }} />
+                    <text content={fit(s.projectSlug.replace(/^-Users-[^-]+-/, ""), Math.max(0, dims().width - 20))} style={{ fg: sel() ? C.accent : C.dim, flexShrink: 0 }} />
+                  </box>
+                );
+              }}
+            </For>
+          </Show>
+        </box>
+      </Show>
 
-            {/* Detail strip for the selected agent. */}
-            <Show when={selected()}>
-              <box style={{ flexDirection: "column", paddingTop: 1 }}>
-                <text content={`  ── ${selected()!.name}${selected()!.label ? ` · ${selected()!.label}` : ""}`} style={{ fg: C.accent }} />
-                <text
-                  content={`     ${selected()!.status}  ${selected()!.model ?? "?"}  ${
-                    selected()!.startedAt && selected()!.endedAt
-                      ? formatDuration(selected()!.endedAt! - selected()!.startedAt!)
-                      : "—"
-                  }  ${selected()!.toolCalls.length} tools`}
-                  style={{ fg: C.dim }}
-                />
-                <For each={selected()!.transcript.slice(-3)}>
-                  {(e) => (
-                    <text
-                      content={`     ${e.kind === "thinking" ? "◇" : "·"} ${e.text.replace(/\s+/g, " ").slice(0, dims().width - 10)}`}
-                      style={{ fg: e.kind === "thinking" ? C.thinking : C.faint }}
-                    />
-                  )}
-                </For>
-              </box>
+      {/* ---- live ---- */}
+      <Show when={screen() === "live"}>
+        <box style={{ flexDirection: "column", width: "100%" }}>
+          <text
+            content={fit(`  ${pane().toUpperCase()}  ·  ctrl+t cycles pane · esc interrupt · ctrl+c quit`, dims().width)}
+            style={{ fg: C.dim }}
+          />
+          <Show when={pane() === "chat"}>
+            <Conversation turns={turns()} maxLines={bodyRows() - 2} />
+            <box style={{ flexDirection: "row", width: "100%", flexShrink: 0 }}>
+              <text content=" ❯ " style={{ fg: C.accent, flexShrink: 0 }} />
+              <text content={fit(draft() + "▏", Math.max(0, dims().width - 3))} style={{ fg: C.fg, flexShrink: 0 }} />
+            </box>
+          </Show>
+          <Show when={pane() === "tree"}>
+            <AgentTreeView agents={agents()} selectedId={selected()?.id} />
+          </Show>
+          <Show when={pane() === "timeline"}>
+            <AgentTimeline agents={agents()} windowStart={liveStart()} windowEnd={Date.now()} selectedId={selected()?.id} />
+          </Show>
+        </box>
+      </Show>
+
+      {/* ---- inspect ---- */}
+      <Show when={screen() === "inspect"}>
+        <box style={{ flexDirection: "column", width: "100%" }}>
+          <Show when={replay()} fallback={<text content="  replaying…" style={{ fg: C.dim }} />}>
+            <text content={fit(`  ${pane() === "timeline" ? "TIMELINE" : "TREE"}  ·  tab switches · esc back · ↑↓ select`, dims().width)} style={{ fg: C.dim }} />
+            <Show when={pane() !== "timeline"}>
+              <AgentTreeView agents={agents()} selectedId={selected()?.id} />
+            </Show>
+            <Show when={pane() === "timeline"}>
+              <AgentTimeline agents={agents()} windowStart={replay()!.startedAt ?? 0} windowEnd={replay()!.endedAt ?? 1} selectedId={selected()?.id} />
             </Show>
           </Show>
         </box>
       </Show>
+
+      {/* ---- permission prompt ---- */}
+      <Show when={perm()}>
+        <box style={{ flexDirection: "row", width: "100%", flexShrink: 0, backgroundColor: C.selBg }}>
+          <text content={fit(` allow ${perm()!.toolName}?  [y] allow   [n] deny `, dims().width)} style={{ fg: C.running, flexShrink: 0 }} />
+        </box>
+      </Show>
+
+      <Show when={screen() !== "sessions"}>
+        <StatusBar
+          model={live()?.model}
+          phase={screen() === "live" ? phase() : "replay"}
+          usage={usage()}
+          apiKeySource={live()?.apiKeySource}
+          agents={agents().length}
+        />
+      </Show>
     </box>
   );
+
+  function liveStart(): number {
+    const nodes = agents();
+    const times = nodes.map((n) => n.startedAt).filter((t): t is number => t !== undefined);
+    return times.length ? Math.min(...times) : Date.now() - 1000;
+  }
 }
 
 await render(() => <App />, { targetFps: 30 });
