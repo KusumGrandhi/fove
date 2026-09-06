@@ -21,28 +21,25 @@ npm run install:local   # build, sign ad-hoc, copy to /Applications
 
 `npm run dist` additionally produces `release/fove-<version>-arm64.dmg`.
 
-**Launching it — unresolved.** The bundle itself is good: run the binary
-directly and everything works.
+**Launching it.** Double-click it in Finder, or open it from Spotlight or the
+Applications folder, like any other app. It is signed ad-hoc rather than with
+an Apple Developer ID, so a copy *downloaded* to another machine would be
+quarantined and need right-click -> Open; a locally built one is not.
+
+**A debugging note worth keeping.** An automated agent running in a sandboxed
+shell cannot launch this app with `open` -- every Electron app fails there with
+
+    codesign_util.cc: task_name_for_pid: (os/kern) failure (5)
+
+and dies before `main.js` runs. Stock Electron fails identically, so this is a
+property of the sandbox, not of fove or its signature. Non-Electron apps
+(Calculator) launch fine from the same shell, which makes it easy to
+misdiagnose as an app bug. To launch it from such a context, go through the
+user's own login session instead:
 
 ```bash
-/Applications/fove.app/Contents/MacOS/fove
+osascript -e 'tell application "Finder" to open POSIX file "/Applications/fove.app"'
 ```
-
-Double-click and `open -a` currently do not launch it. The app is signed
-ad-hoc rather than with an Apple Developer ID, and `spctl -a` reports
-`rejected`. Going through launchd it exits without a window; running the same
-binary directly is fine.
-
-What has been ruled out so far: there is no `com.apple.quarantine` attribute to
-strip (only `com.apple.provenance`, which is SIP-protected), `spctl --add` was
-removed in macOS 26 so a local Gatekeeper exception can no longer be
-registered that way, and there are no code-signing identities in the keychain.
-No `syspolicyd` denial is logged either, so this may not be a Gatekeeper
-rejection at all -- the next step is to capture the app's own stderr under
-launchd before assuming a cause.
-
-Likely real fixes, in order of effort: a self-signed certificate trusted in the
-login keychain, or an Apple Developer ID for a proper signature.
 
 Two packaging traps already paid for:
 

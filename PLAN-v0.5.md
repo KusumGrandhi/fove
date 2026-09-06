@@ -10,45 +10,51 @@ nobody rediscovers the same dead ends.
 
 ---
 
-## 0. Fix the build/launch blocker *(do first — it blocks dogfooding)*
+## 0. Launch blocker — RESOLVED, was never a real bug
 
-**Symptom:** `/Applications/fove.app` runs fine when the binary is executed
-directly, but double-click / `open -a` launches nothing.
+**Outcome: there was nothing wrong with the app.** fove launches correctly by
+double-click, from Spotlight, and from the Applications folder. Verified: 4
+processes, window present, IDE server answering `tools/list`.
 
-**Status: cause NOT established.** The guess was Gatekeeper, and `spctl -a`
-does report `rejected` — but **no `syspolicyd` denial is logged**, which is
-unusual for a real Gatekeeper block. Do not build on the Gatekeeper assumption
-until it is confirmed.
+**What actually happened.** Every test of "double-click" was run from an
+automated agent's *sandboxed shell*, where `open` cannot launch any Electron
+app. It fails before `main.js` runs with:
 
-Already ruled out, so don't retrace:
-- No `com.apple.quarantine` attribute to strip — only `com.apple.provenance`,
-  which is SIP-protected and cannot be removed.
-- `spctl --add` was **removed in macOS 26** ("This operation is no longer
-  supported"), so a local Gatekeeper exception cannot be registered that way.
-  The `approve:local` script was deleted for this reason.
-- No code-signing identities in the keychain (`security find-identity` → 0).
+    codesign_util.cc:79] task_name_for_pid: (os/kern) failure (5)
 
-**Next step, in order:**
-1. Capture the app's own stderr under launchd:
-   `open -a /Applications/fove.app --stderr <file> --stdout <file>`.
-   This distinguishes "refused to launch" from "launched and crashed" — the
-   two have completely different fixes, and this was never actually run.
-2. If it launches and crashes, treat as an ordinary bug (likely env or a path
-   that differs under launchd vs. a shell).
-3. If it never launches, then it is signing: create a self-signed certificate
-   trusted in the login keychain, or get an Apple Developer ID.
+The control that settled it: **stock Electron** (`node_modules/electron/dist/
+Electron.app`), untouched, fails identically from that shell -- while
+Calculator launches fine, and VS Code runs happily with 24 processes. So the
+failure tracks the launching context, not the app or its signature.
 
-**Note on the user's framing.** This was described as "the app publishing key
-available is the issue". A signing identity is the *likely* fix but is not yet
-demonstrated to be the cause — step 1 settles it cheaply, so do it before
-paying for a Developer ID.
+To launch it from such a context, hand the launch to the user's login session:
 
-Related: v0.1 also fixed `ELECTRON_RUN_AS_NODE` being set in the user's login
-environment (Electron runs `main.js` as plain Node and exits silently). The
-re-exec guard is in `main.ts`; keep it, and keep the app-root argument, because
-in a packaged app `argv` is just `[binary]`.
+```bash
+osascript -e 'tell application "Finder" to open POSIX file "/Applications/fove.app"'
+```
 
----
+**The mistakes worth remembering**, since both cost real time:
+
+- Gatekeeper was asserted as the cause on the strength of `spctl -a` saying
+  `rejected`, while **no `syspolicyd` denial was ever logged** -- the evidence
+  that contradicted the theory was visible and went unweighed. An Apple
+  Developer ID would have been bought to fix a non-problem.
+- Several "it doesn't launch" results were the *test harness* failing, not the
+  app: `timeout` missing from a stripped `PATH`, `spawnSync` holding the
+  pipeline so backgrounding killed the child, and Chromium flags
+  (`--remote-debugging-port`) being rejected outright under
+  `ELECTRON_RUN_AS_NODE`.
+
+**The lesson for the rest of this plan:** when something fails only under
+instrumentation, test the instrument before concluding anything about the
+product. A control case (does a *stock* build fail the same way?) costs one
+command and would have ended this in minutes.
+
+Still genuinely true and worth keeping:
+- `ELECTRON_RUN_AS_NODE` is set in this user's login environment, and the
+  re-exec guard in `main.ts` is what makes a double-clicked `.app` survive it.
+- Signing stays ad-hoc. A copy *downloaded* to another machine is quarantined
+  and needs right-click -> Open; distribution would need a Developer ID.
 
 ## 1. Icon
 
@@ -196,8 +202,8 @@ entry cannot break the plain CLI.
 
 ## Suggested order
 
-1. **Launch blocker** (§0) — everything else is easier once fove opens by
-   double-click. Start with the stderr capture; it may be cheap.
+1. ~~**Launch blocker** (§0)~~ — resolved; was a sandboxed-shell artifact, not
+   an app defect.
 2. **Stats fix** (§3) — root cause known, small, and it is currently lying to
    the user.
 3. **Icon** (§1) — small, visible, self-contained.
