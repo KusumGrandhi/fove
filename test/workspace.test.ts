@@ -36,10 +36,49 @@ afterEach(async () => {
 });
 
 describe("suggestRecipe", () => {
-  test("offers the env files that actually exist", async () => {
+  test("offers an untracked env file", async () => {
     const r = await suggestRecipe(repo);
     expect(r.link).toContain(".env");
-    expect(r.link).not.toContain(".env.local");
+  });
+
+  test("finds env files below the root, not just in it", async () => {
+    // The case this was written for: core/.env is 90 bytes of PYTHONPATH while
+    // core/flask/.env is the 19KB file that actually matters.
+    await mkdir(join(repo, "flask"), { recursive: true });
+    await writeFile(join(repo, "flask", ".env"), "DATABASE_URL=real\n");
+    const r = await suggestRecipe(repo);
+    expect(r.link).toContain("flask/.env");
+  });
+
+  test("skips env files git already tracks", async () => {
+    // A tracked file arrives with the worktree, so linking it fights git.
+    await mkdir(join(repo, "frontend"), { recursive: true });
+    await writeFile(join(repo, "frontend", ".env.production"), "API=1\n");
+    await git(repo, ["add", "-f", "frontend/.env.production"]);
+    await git(repo, ["commit", "-qm", "track prod env"]);
+
+    const r = await suggestRecipe(repo);
+    expect(r.link).not.toContain("frontend/.env.production");
+  });
+
+  test("skips .env.example, which is committed documentation", async () => {
+    await writeFile(join(repo, ".env.example"), "SECRET=replace-me\n");
+    const r = await suggestRecipe(repo);
+    expect(r.link).not.toContain(".env.example");
+  });
+
+  test("does not walk into a nested checkout's own env", async () => {
+    await mkdir(join(repo, ".conductor", "other"), { recursive: true });
+    await writeFile(join(repo, ".conductor", "other", ".env"), "NOT=mine\n");
+    const r = await suggestRecipe(repo);
+    expect(r.link!.some((p) => p.startsWith(".conductor/"))).toBe(false);
+  });
+
+  test("ignores dependency directories", async () => {
+    await mkdir(join(repo, "node_modules", "pkg"), { recursive: true });
+    await writeFile(join(repo, "node_modules", "pkg", ".env"), "X=1\n");
+    const r = await suggestRecipe(repo);
+    expect(r.link!.some((p) => p.includes("node_modules"))).toBe(false);
   });
 });
 

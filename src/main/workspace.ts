@@ -19,7 +19,8 @@
  */
 
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile, symlink, lstat, readlink } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile, symlink, lstat, readlink } from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -71,22 +72,84 @@ export async function saveRecipe(repoRoot: string, recipe: Recipe): Promise<void
 /**
  * A recipe inferred from what the primary checkout actually has.
  *
- * Offered as a starting point so the feature is useful before anything is
- * configured: the files named here are the ones that are present, gitignored,
- * and needed to run.
+ * Finds env files *anywhere* in the tree, not just at the root. Checking only
+ * the root got this wrong on the repository it was written for: `core/.env` is
+ * 90 bytes, while the file that actually matters, `core/flask/.env`, is 19KB
+ * and one directory down. A working worktree there links both.
+ *
+ * The test for "must be linked" is **untracked by git**:
+ *
+ *   - a *tracked* env file arrives with the worktree already, so linking it
+ *     would fight git -- `core` tracks ten of them under `aiprise-frontend/`
+ *     and `deployments/`, and a working worktree links none of them;
+ *   - an *untracked* one exists only in the primary checkout, which is exactly
+ *     what a fresh worktree is missing.
+ *
+ * `git ls-files` answers this directly. `check-ignore` does not: `core/.env`
+ * is both tracked *and* matched by a gitignore rule, so an ignore-based test
+ * gets it wrong in the one case that matters.
  */
 export async function suggestRecipe(repoRoot: string): Promise<Recipe> {
-  const candidates = [".env", ".env.local", ".env.development", ".envrc"];
-  const link: string[] = [];
-  for (const name of candidates) {
-    try {
-      await lstat(join(repoRoot, name));
-      link.push(name);
-    } catch {
-      // Not present: nothing to link.
-    }
+  const found = await findEnvFiles(repoRoot);
+  if (found.length === 0) return { link: [] };
+
+  // One batched call listing which of these git tracks; the rest are ours.
+  try {
+    const { stdout } = await run("git", ["ls-files", "-z", "--", ...found], {
+      cwd: repoRoot,
+      timeout: 30_000,
+    });
+    const tracked = new Set(stdout.split("\u0000").filter(Boolean));
+    return { link: found.filter((f) => !tracked.has(f)).sort() };
+  } catch {
+    // Not a git repository, or git unavailable: offer everything found and let
+    // the user prune it rather than silently offering nothing.
+    return { link: found.sort() };
   }
-  return { link };
+}
+
+/** Directories never worth walking for env files. */
+const SKIP_DIRS = new Set([
+  ".git", "node_modules", "venv", ".venv", "__pycache__", "dist", "build",
+  ".next", ".cache", "target", "vendor", ".mypy_cache", ".pytest_cache",
+  // Tooling that parks whole checkouts inside the repo. Their env files belong
+  // to those trees, not to a new worktree of this one.
+  ".claude", ".conductor", ".warp", ".worktrees",
+]);
+
+/**
+ * Env files in the tree, as repo-relative paths.
+ *
+ * Bounded on purpose: a few levels deep is enough to reach `flask/.env` or
+ * `services/api/.env` without walking a monorepo's entire history of
+ * dependencies.
+ */
+async function findEnvFiles(root: string, maxDepth = 3): Promise<string[]> {
+  const out: string[] = [];
+
+  const walk = async (dir: string, rel: string, depth: number): Promise<void> => {
+    let entries: Dirent[];
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (depth >= maxDepth || SKIP_DIRS.has(entry.name)) continue;
+        await walk(join(dir, entry.name), childRel, depth + 1);
+      } else if (/^\.env(\..+)?$/.test(entry.name) || entry.name === ".envrc") {
+        // `.env`, `.env.local`, `.env.production` -- but not `.env.example`,
+        // which is committed documentation rather than real values.
+        if (/\.(example|sample|template)$/i.test(entry.name)) continue;
+        out.push(childRel);
+      }
+    }
+  };
+
+  await walk(root, "", 0);
+  return out;
 }
 
 /** Reject a path that would escape the worktree. */
