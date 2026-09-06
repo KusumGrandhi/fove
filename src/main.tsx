@@ -15,6 +15,7 @@ import { replaySession } from "./data/replay.ts";
 import { emptyTotals, formatTokens } from "./data/usage.ts";
 import { LiveSession, type PermissionRequest } from "./core/session.ts";
 import { AgentTimeline } from "./panes/AgentTimeline.tsx";
+import { AgentGrid } from "./panes/AgentGrid.tsx";
 import { AgentTreeView } from "./panes/AgentTree.tsx";
 import { Conversation, type Turn } from "./panes/Conversation.tsx";
 import { StatusBar } from "./panes/StatusBar.tsx";
@@ -22,7 +23,7 @@ import { C, fit } from "./panes/theme.ts";
 import type { SessionSummary } from "./data/types.ts";
 
 type Screen = "sessions" | "inspect" | "live";
-type Pane = "chat" | "tree" | "timeline";
+type Pane = "chat" | "grid" | "tree" | "timeline";
 
 /**
  * OpenTUI queries the terminal directly and ignores COLUMNS/LINES, reporting a
@@ -160,7 +161,10 @@ function App() {
     }
 
     if (screen() === "live") {
-      if (ctrl && k === "t") { setPane((v) => (v === "chat" ? "tree" : v === "tree" ? "timeline" : "chat")); return; }
+      if (ctrl && k === "t") {
+        setPane((v) => (v === "chat" ? "grid" : v === "grid" ? "tree" : v === "tree" ? "timeline" : "chat"));
+        return;
+      }
       if (k === "escape") { void live()?.interrupt(); return; }
       if (pane() === "chat") {
         if (k === "return") { submit(); return; }
@@ -173,6 +177,13 @@ function App() {
       const n = agents().length;
       if (k === "down" || k === "j") setAgentCursor((c) => Math.min(n - 1, c + 1));
       if (k === "up" || k === "k") setAgentCursor((c) => Math.max(0, c - 1));
+      if (k === "x") {
+        // Per-agent interrupt: mark it stopped locally. The SDK has no
+        // per-subagent kill, so this reflects intent in the UI and stops the
+        // tile updating; the turn-level interrupt is still esc.
+        const a = selected();
+        if (a && a.status === "running") { a.status = "error"; setTick((t) => t + 1); }
+      }
       return;
     }
 
@@ -237,7 +248,12 @@ function App() {
       <Show when={screen() === "live"}>
         <box style={{ flexDirection: "column", width: "100%" }}>
           <text
-            content={fit(`  ${pane().toUpperCase()}  ·  ctrl+t cycles pane · esc interrupt · ctrl+c quit`, dims().width)}
+            content={fit(
+              `  ${pane().toUpperCase()}  ·  ^t pane · ${
+                pane() === "chat" ? "⏎ send" : "↑↓ select · x stop"
+              } · esc stop · ^c quit`,
+              dims().width,
+            )}
             style={{ fg: C.dim }}
           />
           <Show when={pane() === "chat"}>
@@ -246,6 +262,9 @@ function App() {
               <text content=" ❯ " style={{ fg: C.accent, flexShrink: 0 }} />
               <text content={fit(draft() + "▏", Math.max(0, dims().width - 3))} style={{ fg: C.fg, flexShrink: 0 }} />
             </box>
+          </Show>
+          <Show when={pane() === "grid"}>
+            <AgentGrid agents={agents()} selectedId={selected()?.id} height={bodyRows()} />
           </Show>
           <Show when={pane() === "tree"}>
             <AgentTreeView agents={agents()} selectedId={selected()?.id} />

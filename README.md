@@ -13,7 +13,7 @@ Under construction. See the plan for milestones.
 - **M0** scaffold ✅
 - **M1** read-only inspector — parser, agent tree, timeline, session browser ✅
 - **M2** live single session — SDK streaming, permissions, model info ✅
-- **M3** tabs + live subagent visualization *(the centerpiece)*
+- **M3** live subagent visualization — tiled AgentGrid ✅ *(the centerpiece)*
 - **M4** config browser
 - **M5** proxy: API inspector + model switching
 
@@ -50,6 +50,10 @@ therefore clipped explicitly with `fit()`, and row boxes carry
 `render()` dies inside `createRoot`: solid-js's export map lists `node` (the SSR
 stub) ahead of the client build, and neither a `conditions` entry nor
 `--conditions=solid` overrides it.
+
+**OpenTUI does not clear rows a shorter render leaves behind.** A tile whose
+content shrinks keeps stale text from the previous frame, so tiles are padded to
+a fixed height.
 
 **Debug logging must go to a file, not `console.*`.** OpenTUI restores the
 terminal on exit, which swallows anything written to stdout/stderr from inside
