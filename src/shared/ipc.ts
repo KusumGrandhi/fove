@@ -43,4 +43,10 @@ export const CH = {
   teamSend: "teams:send",
   teamInterrupt: "teams:interrupt",
   bgSessions: "sessions:background",
+  ideOpenFile: "ide:openFile",
+  ideOpenDiff: "ide:openDiff",
+  ideDiffResult: "ide:diffResult",
+  ideStatus: "ide:status",
+  ideSelection: "ide:selection",
+  ideEditors: "ide:editors",
 } as const;

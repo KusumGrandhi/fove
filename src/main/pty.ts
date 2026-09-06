@@ -34,6 +34,30 @@ export interface Session {
   exited: boolean;
 }
 
+/**
+ * The environment a pane's process should see.
+ *
+ * Anything Claude Code sets for *its own* child processes must not leak into a
+ * `claude` this app spawns: with CLAUDE_CODE_CHILD_SESSION or an inherited
+ * ENTRYPOINT present, the new process believes it is already inside another
+ * session, refuses to attach to this app as an IDE, and disables transcript
+ * saving. This matters whenever fove is launched from a terminal that is
+ * itself running Claude Code.
+ *
+ * CLAUDE_CONFIG_DIR is preserved -- it is a legitimate user setting, and tests
+ * rely on it pointing at a fixture.
+ */
+function cleanEnv(extra?: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = { ...process.env } as Record<string, string>;
+  for (const key of Object.keys(env)) {
+    if (key === "CLAUDE_CONFIG_DIR") continue;
+    if (key.startsWith("CLAUDE_") || key.startsWith("CLAUDECODE")) delete env[key];
+  }
+  // Set by Electron itself; with it present a spawned Electron runs as plain Node.
+  delete env.ELECTRON_RUN_AS_NODE;
+  return { ...env, TERM: "xterm-256color", ...extra };
+}
+
 export class PtyService {
   private readonly sessions = new Map<string, Session>();
 
@@ -54,6 +78,8 @@ export class PtyService {
     cwd?: string;
     cols: number;
     rows: number;
+    /** Extra environment, e.g. the IDE vars that let `claude` find this app. */
+    env?: Record<string, string>;
   }): Session {
     const existing = this.sessions.get(req.paneId);
     if (existing && !existing.exited) return existing;
@@ -67,7 +93,7 @@ export class PtyService {
       cols: req.cols >= MIN_COLS ? req.cols : DEFAULT_COLS,
       rows: req.rows >= MIN_ROWS ? req.rows : DEFAULT_ROWS,
       cwd: req.cwd || process.env.HOME,
-      env: { ...process.env, TERM: "xterm-256color" } as Record<string, string>,
+      env: cleanEnv(req.env),
     });
 
     const session: Session = {

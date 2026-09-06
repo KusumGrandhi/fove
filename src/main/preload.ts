@@ -40,6 +40,12 @@ const CH = {
   teamSend: "teams:send",
   teamInterrupt: "teams:interrupt",
   bgSessions: "sessions:background",
+  ideOpenFile: "ide:openFile",
+  ideOpenDiff: "ide:openDiff",
+  ideDiffResult: "ide:diffResult",
+  ideStatus: "ide:status",
+  ideSelection: "ide:selection",
+  ideEditors: "ide:editors",
 } as const;
 
 interface SpawnRequest {
@@ -99,6 +105,26 @@ const api = {
   memoryList: (): Promise<unknown[]> => ipcRenderer.invoke(CH.memoryList),
 
   bgSessions: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.bgSessions, cwd),
+
+  /** Claude asked to open a file or a diff in this app's editor. */
+  onIdeOpenFile: (fn: (req: unknown) => void): (() => void) => {
+    const h = (_e: unknown, req: unknown): void => fn(req);
+    ipcRenderer.on(CH.ideOpenFile, h);
+    return () => { ipcRenderer.removeListener(CH.ideOpenFile, h); };
+  },
+  onIdeOpenDiff: (fn: (req: unknown) => void): (() => void) => {
+    const h = (_e: unknown, req: unknown): void => fn(req);
+    ipcRenderer.on(CH.ideOpenDiff, h);
+    return () => { ipcRenderer.removeListener(CH.ideOpenDiff, h); };
+  },
+  /** The user's verdict on a diff Claude is blocking on. */
+  ideDiffResult: (id: string, verdict: "saved" | "rejected"): void =>
+    ipcRenderer.send(CH.ideDiffResult, id, verdict),
+  ideStatus: (): Promise<{ port: number; connected: boolean }> => ipcRenderer.invoke(CH.ideStatus),
+  /** Tell Claude what the user just selected. */
+  ideSelection: (sel: unknown): void => ipcRenderer.send(CH.ideSelection, sel),
+  /** Keep the main process's view of open editors current. */
+  ideEditors: (editors: unknown[]): void => ipcRenderer.send(CH.ideEditors, editors),
 
   teamsList: (): Promise<unknown[]> => ipcRenderer.invoke(CH.teamsList),
   teamCapture: (socket: string, paneId: string, lines?: number): Promise<string> =>

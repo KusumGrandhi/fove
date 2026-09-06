@@ -15,6 +15,7 @@ import { FileService } from "./files.js";
 import { ClaudeSessionService, toWire } from "./claudeSession.js";
 import { TeamService } from "./teams.js";
 import { backgroundSessions } from "./sessions.js";
+import { IdeService } from "./ide.js";
 import { readClaudeJson } from "../data/config/claudeJson.js";
 import { listSkills, sortSkills, budget, orphanUsage } from "../data/config/skills.js";
 import { listMemories } from "../data/config/memory.js";
@@ -67,6 +68,9 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   createWindow();
+  // Advertise this app as an IDE so `claude` panes open files here. Failure is
+  // not fatal: the app simply runs without IDE integration.
+  void ide.start().catch(() => null);
   // TH_SMOKE=1 drives a scripted check and prints a verdict, for CI/dev.
   if (process.env.TH_SMOKE) void runSmoke();
   app.on("activate", () => {
@@ -79,13 +83,19 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => ptys.killAll());
+app.on("before-quit", () => {
+  ptys.killAll();
+  // Remove the lock file, so Claude is never offered a dead IDE.
+  void ide.stop();
+});
 
 // ---- IPC ------------------------------------------------------------------
 
 ipcMain.handle(CH.ptySpawn, (_e, req: SpawnRequest) => {
   const fresh = !ptys.has(req.paneId);
-  ptys.spawn(req);
+  // Every pane inherits the IDE env, so a `claude` started by hand in a shell
+  // pane finds this app too -- not just panes the app spawns as "claude".
+  ptys.spawn({ ...req, env: ide.env() });
   // Replay history so a remounted pane keeps its scrollback.
   return { fresh, scrollback: fresh ? "" : ptys.scrollback(req.paneId) };
 });
@@ -156,6 +166,52 @@ ipcMain.handle(CH.skillsToggle, async (_e, name: string, current?: string) => {
 ipcMain.handle(CH.memoryList, () => listMemories());
 
 ipcMain.handle(CH.bgSessions, (_e, cwd: string) => backgroundSessions(cwd));
+
+// ---- IDE integration ------------------------------------------------------
+// Claude Code connects to us and calls tools; these forward to the renderer so
+// its output lands in fove's editor pane rather than the terminal.
+
+/** Workspaces the renderer has open, mirrored so the lock file can list them. */
+let ideWorkspaces: string[] = [];
+/** Editors the renderer has open, for getOpenEditors/checkDocumentDirty. */
+let ideEditors: { filePath: string; isDirty?: boolean }[] = [];
+let ideSelection: import("./ide.js").Selection | null = null;
+/** Diffs Claude is blocking on, keyed by id, resolved by the user's verdict. */
+const pendingDiffs = new Map<string, (v: "saved" | "rejected") => void>();
+
+const ide = new IdeService({
+  openFile: (req) => { send(CH.ideOpenFile, req); },
+  openDiff: (req) =>
+    new Promise<"saved" | "rejected">((resolve) => {
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      pendingDiffs.set(id, resolve);
+      send(CH.ideOpenDiff, { ...req, id });
+      // Never leave Claude blocked forever on a window the user closed.
+      setTimeout(() => {
+        if (pendingDiffs.delete(id)) resolve("rejected");
+      }, 10 * 60_000);
+    }),
+  closeTab: () => {},
+  closeAllDiffTabs: () => {},
+  openEditors: async () => ideEditors,
+  currentSelection: async () => ideSelection,
+  isDirty: async (f) => ideEditors.find((e) => e.filePath === f)?.isDirty ?? false,
+  save: async () => true,
+  workspaceFolders: () => (ideWorkspaces.length ? ideWorkspaces : [process.cwd()]),
+});
+
+ipcMain.on(CH.ideDiffResult, (_e, id: string, verdict: "saved" | "rejected") => {
+  const resolve = pendingDiffs.get(id);
+  if (resolve) { pendingDiffs.delete(id); resolve(verdict); }
+});
+ipcMain.on(CH.ideSelection, (_e, sel: import("./ide.js").Selection | null) => {
+  ideSelection = sel;
+  ide.notifySelection(sel);
+});
+ipcMain.on(CH.ideEditors, (_e, editors: { filePath: string; isDirty?: boolean }[]) => {
+  ideEditors = editors ?? [];
+});
+ipcMain.handle(CH.ideStatus, () => ({ port: ide.port, connected: ide.port > 0 }));
 
 ipcMain.handle(CH.teamsList, () => teamSvc.list());
 ipcMain.handle(CH.teamCapture, (_e, socket: string, paneId: string, lines?: number) =>

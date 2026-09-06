@@ -28,6 +28,8 @@ interface PaneSpec {
   kind: PaneKind;
   title: string;
   cwd?: string;
+  /** For editor panes: the file to show, e.g. one Claude asked us to open. */
+  openPath?: string;
 }
 
 /**
@@ -269,6 +271,49 @@ export function App() {
   const railCwd = active?.cwd || appCwd;
   const snap = useSnapshot(railCwd, 2500);
 
+  /**
+   * Claude Code asked this app to open a file (it discovered us as its IDE).
+   *
+   * Reuse an editor pane if the tab has one -- opening a new pane per file
+   * would shred the layout during a busy turn -- otherwise split one off the
+   * focused pane.
+   */
+  useEffect(() => {
+    const off = window.th.onIdeOpenFile((raw) => {
+      const req = raw as { filePath?: string };
+      const file = req?.filePath;
+      if (!file || !active) return;
+      const existing = Object.values(active.panes).find((p) => p.kind === "editor");
+      if (existing) {
+        updateTab(active.id, (t) => ({
+          ...t,
+          panes: { ...t.panes, [existing.id]: { ...existing, openPath: file } },
+          focusedPaneId: existing.id,
+        }));
+        return;
+      }
+      const pane = { ...makePane("editor", active.cwd), openPath: file };
+      updateTab(active.id, (t) => ({
+        ...t,
+        tree: split(t.tree, t.focusedPaneId, pane.id, "row"),
+        panes: { ...t.panes, [pane.id]: pane },
+        focusedPaneId: pane.id,
+      }));
+    });
+    return off;
+  }, [active, updateTab]);
+
+  // Tell the main process which workspaces and editors are open, so the IDE
+  // server can answer getWorkspaceFolders / getOpenEditors truthfully.
+  useEffect(() => {
+    const editors = tabs.flatMap((t) =>
+      Object.values(t.panes)
+        .filter((p) => p.kind === "editor" && p.openPath)
+        .map((p) => ({ filePath: p.openPath! })),
+    );
+    window.th.ideEditors(editors);
+  }, [tabs]);
+
   // Live teammates (a tmux swarm). The bar renders nothing when none run.
   const { team, live } = useTeammates(2500);
   const [openMateId, setOpenMateId] = useState<string | null>(null);
@@ -434,7 +479,11 @@ export function App() {
                     {spec.kind === "git" ? (
                       <GitStatusPane cwd={spec.cwd ?? cwdOf(active)} />
                     ) : spec.kind === "editor" ? (
-                      <EditorPane cwd={spec.cwd ?? cwdOf(active)} />
+                      <EditorPane
+                        key={spec.id}
+                        cwd={spec.cwd ?? cwdOf(active)}
+                        initialPath={spec.openPath}
+                      />
                     ) : spec.kind === "agents" ? (
                       <AgentsPane cwd={spec.cwd ?? cwdOf(active)} />
                     ) : (

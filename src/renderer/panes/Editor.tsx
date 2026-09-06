@@ -205,6 +205,15 @@ export function EditorPane(props: { cwd: string; initialPath?: string }) {
     if (file.error) setNotice(`${file.name}: ${file.error}`);
   }, []);
 
+  /**
+   * Open whatever Claude (or the app) asked for, including on a *later*
+   * request into an already-mounted pane -- a mount-only initial path would
+   * silently ignore every file after the first.
+   */
+  useEffect(() => {
+    if (props.initialPath) void openFile(props.initialPath);
+  }, [props.initialPath, openFile]);
+
   const save = useCallback(async () => {
     const f = files.find((x) => x.path === activePath);
     const model = activePath ? modelsRef.current.get(activePath) : undefined;
