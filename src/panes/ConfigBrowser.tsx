@@ -59,11 +59,11 @@ export function ConfigBrowser(props: {
             `  ${props.enabledCount} skills in the system prompt  ·  ~${props.budgetTokens} tokens every session`,
             w(),
           )}
-          style={{ fg: C.accent }}
+          style={{ fg: C.accent, flexShrink: 0 }}
         />
         <text
           content={fit("  name                                          cost  uses  per-use  state", w())}
-          style={{ fg: C.faint }}
+          style={{ fg: C.faint, flexShrink: 0 }}
         />
         {(() => {
           const { items, offset } = window(props.skills);
@@ -88,7 +88,7 @@ export function ConfigBrowser(props: {
       <Show when={props.tab === "memory"}>
         <text
           content={fit(`  ${props.memories.length} memory files${props.query ? `  ·  filter: ${props.query}` : ""}`, w())}
-          style={{ fg: C.accent }}
+          style={{ fg: C.accent, flexShrink: 0 }}
         />
         {(() => {
           const { items, offset } = window(props.memories);
@@ -115,7 +115,7 @@ export function ConfigBrowser(props: {
       </Show>
 
       <Show when={props.tab === "mcp"}>
-        <text content={fit(`  ${props.mcp.length} MCP servers configured`, w())} style={{ fg: C.accent }} />
+        <text content={fit(`  ${props.mcp.length} MCP servers configured`, w())} style={{ fg: C.accent, flexShrink: 0 }} />
         <For each={props.mcp}>
           {(s) => (
             <box style={{ flexDirection: "row", width: "100%", flexShrink: 0 }}>
@@ -126,7 +126,7 @@ export function ConfigBrowser(props: {
             </box>
           )}
         </For>
-        <text content={fit("  (read-only — servers live in ~/.claude.json, which this app never writes)", w())} style={{ fg: C.faint }} />
+        <text content={fit("  (read-only — servers live in ~/.claude.json, which this app never writes)", w())} style={{ fg: C.faint, flexShrink: 0 }} />
       </Show>
     </box>
   );

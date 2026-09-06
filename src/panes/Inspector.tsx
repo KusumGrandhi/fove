@@ -72,12 +72,12 @@ export function Inspector(props: {
       </box>
       <Show
         when={props.captures.length > 0}
-        fallback={<text content="  no requests captured yet" style={{ fg: C.dim }} />}
+        fallback={<text content="  no requests captured yet" style={{ fg: C.dim, flexShrink: 0 }} />}
       >
         <Show when={!props.detail}>
           <text
             content={fit("  path                                              model    status   time   req    tokens", w())}
-            style={{ fg: C.faint }}
+            style={{ fg: C.faint, flexShrink: 0 }}
           />
           <For each={props.captures.slice(0, rows())}>
             {(c, i) => {

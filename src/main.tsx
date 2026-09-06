@@ -335,9 +335,9 @@ function App() {
         <box style={{ flexDirection: "column", width: "100%" }}>
           <text
             content={fit(`  ${(sessions() ?? []).length} sessions  ·  ⏎ inspect · n live · c config · w wire${wireOn() ? " ON" : ""} · q quit  [${cursor() + 1}/${(sessions() ?? []).length || 1}]`, dims().width)}
-            style={{ fg: C.dim }}
+            style={{ fg: C.dim, flexShrink: 0 }}
           />
-          <Show when={sessions()} fallback={<text content="  scanning…" style={{ fg: C.dim }} />}>
+          <Show when={sessions()} fallback={<text content="  scanning…" style={{ fg: C.dim, flexShrink: 0 }} />}>
             <For each={visibleSessions()}>
               {(s, i) => {
                 const sel = () => i() + listOffset() === cursor();
@@ -366,7 +366,7 @@ function App() {
               } · esc stop · ^c quit`,
               dims().width,
             )}
-            style={{ fg: C.dim }}
+            style={{ fg: C.dim, flexShrink: 0 }}
           />
           <Show when={pane() === "chat"}>
             <Conversation turns={turns()} maxLines={bodyRows() - 2} />
@@ -399,8 +399,8 @@ function App() {
       {/* ---- inspect ---- */}
       <Show when={screen() === "inspect"}>
         <box style={{ flexDirection: "column", width: "100%" }}>
-          <Show when={replay()} fallback={<text content="  replaying…" style={{ fg: C.dim }} />}>
-            <text content={fit(`  ${pane() === "timeline" ? "TIMELINE" : "TREE"}  ·  tab switches · esc back · ↑↓ select`, dims().width)} style={{ fg: C.dim }} />
+          <Show when={replay()} fallback={<text content="  replaying…" style={{ fg: C.dim, flexShrink: 0 }} />}>
+            <text content={fit(`  ${pane() === "timeline" ? "TIMELINE" : "TREE"}  ·  tab switches · esc back · ↑↓ select`, dims().width)} style={{ fg: C.dim, flexShrink: 0 }} />
             <Show when={pane() !== "timeline"}>
               <AgentTreeView agents={agents()} selectedId={selected()?.id} />
             </Show>
@@ -421,9 +421,9 @@ function App() {
               }  ·  esc back`,
               dims().width,
             )}
-            style={{ fg: C.dim }}
+            style={{ fg: C.dim, flexShrink: 0 }}
           />
-          <Show when={configData()} fallback={<text content="  loading config…" style={{ fg: C.dim }} />}>
+          <Show when={configData()} fallback={<text content="  loading config…" style={{ fg: C.dim, flexShrink: 0 }} />}>
             <ConfigBrowser
               tab={configTab()}
               skills={sortedSkills()}

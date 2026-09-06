@@ -57,6 +57,11 @@ makes provider switching seamless: swapping upstream is a routing change inside
 it, so the client keeps its connection and the conversation view never resets.
 Responses are tee'd rather than buffered, or streaming would break.
 
+**Every `<text>` in a flex column needs `flexShrink: 0`.** Without it a row is
+collapsed to zero height when siblings fill the space -- it vanishes with no
+error and no layout warning. This hid the session-picker hint line until an
+end-to-end check caught it.
+
 **OpenTUI does not clear rows a shorter render leaves behind.** A tile whose
 content shrinks keeps stale text from the previous frame, so tiles are padded to
 a fixed height.

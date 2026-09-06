@@ -126,7 +126,7 @@ export function AgentGrid(props: {
         fallback={
           <text
             content="  no subagents yet — they appear here as Claude spawns them"
-            style={{ fg: C.dim }}
+            style={{ fg: C.dim, flexShrink: 0 }}
           />
         }
       >

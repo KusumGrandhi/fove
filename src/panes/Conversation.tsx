@@ -64,7 +64,7 @@ export function Conversation(props: { turns: Turn[]; width?: number; maxLines?: 
   return (
     <box style={{ flexDirection: "column", width: "100%" }}>
       <Show when={lines().length > 0} fallback={
-        <text content="  (no messages yet — type a prompt and press ⏎)" style={{ fg: C.dim }} />
+        <text content="  (no messages yet — type a prompt and press ⏎)" style={{ fg: C.dim, flexShrink: 0 }} />
       }>
         <For each={lines()}>
           {(l) => (
