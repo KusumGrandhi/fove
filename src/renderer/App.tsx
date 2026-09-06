@@ -10,12 +10,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Workspace } from "./layout/Workspace.js";
 import { TerminalPane } from "./panes/Terminal.js";
 import { GitStatusPane } from "./panes/GitStatus.js";
+import { EditorPane } from "./panes/Editor.js";
 import { C, Divider, ToolButton } from "./ui/Chrome.js";
 import {
   closePane, isValid, leaf, newId, paneIds, split, type Dir, type Node,
 } from "../shared/layout.js";
 
-type PaneKind = "shell" | "claude" | "git";
+type PaneKind = "shell" | "claude" | "git" | "editor";
 
 interface PaneSpec {
   id: string;
@@ -163,6 +164,7 @@ export function App() {
       else if (e.key === "t") { e.preventDefault(); addTab(); }
       else if (e.key === "j") { e.preventDefault(); doSplit("column", "claude"); }
       else if (e.key === "g") { e.preventDefault(); doSplit("row", "git"); }
+      else if (e.key === "e") { e.preventDefault(); doSplit("row", "editor"); }
       else if (e.key === "Enter") { e.preventDefault(); doSplit("row", "claude"); }
       else if (/^[1-9]$/.test(e.key)) {
         const i = Number(e.key) - 1;
@@ -210,6 +212,7 @@ export function App() {
         <ToolButton label="Claude" hint="⌘↵" icon="✳" onClick={() => doSplit("row", "claude")} />
         <ToolButton label="Shell" icon="❯" onClick={() => doSplit("row", "shell")} />
         <ToolButton label="Git" hint="⌘G" icon="⎇" onClick={() => doSplit("row", "git")} />
+        <ToolButton label="Editor" hint="⌘E" icon="◧" onClick={() => doSplit("row", "editor")} />
         <Divider />
         <ToolButton label="New tab" hint="⌘T" icon="＋" onClick={addTab} />
         <div style={S.grow} />
@@ -247,7 +250,10 @@ export function App() {
                   >
                     <span style={S.gripDots}>⠿</span>
                     <span style={{ color: focused ? C.fg : C.faint }}>
-                      {spec.kind === "claude" ? "✳ claude" : spec.kind === "git" ? "⎇ git" : "❯ shell"}
+                      {spec.kind === "claude" ? "✳ claude"
+                        : spec.kind === "git" ? "⎇ git"
+                        : spec.kind === "editor" ? "◧ editor"
+                        : "❯ shell"}
                     </span>
                     <div style={S.grow} />
                     <button
@@ -265,6 +271,8 @@ export function App() {
                   <div style={S.paneBody}>
                     {spec.kind === "git" ? (
                       <GitStatusPane cwd={spec.cwd ?? cwdOf(active)} />
+                    ) : spec.kind === "editor" ? (
+                      <EditorPane cwd={spec.cwd ?? cwdOf(active)} />
                     ) : (
                       <TerminalPane
                         paneId={paneId}

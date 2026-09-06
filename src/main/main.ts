@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { PtyService } from "./pty.js";
 import { GitService } from "./git.js";
+import { FileService } from "./files.js";
 import { openInEditor, revealInFinder } from "./openExternal.js";
 import { loadState, saveState } from "./store.js";
 import { CH, type SpawnRequest } from "../shared/ipc.js";
@@ -88,6 +89,7 @@ ipcMain.on(CH.ptyResize, (_e, paneId: string, cols: number, rows: number) =>
 ipcMain.on(CH.ptyKill, (_e, paneId: string) => ptys.kill(paneId));
 
 const gitSvc = new GitService();
+const fileSvc = new FileService();
 
 ipcMain.handle(CH.gitRoot, (_e, cwd: string) => gitSvc.root(cwd));
 ipcMain.handle(CH.gitStatus, (_e, cwd: string) => gitSvc.status(cwd));
@@ -104,6 +106,17 @@ ipcMain.on(CH.revealInFinder, (_e, file: string) => revealInFinder(file));
 ipcMain.handle(CH.pickFolder, async () => {
   const { dialog } = await import("electron");
   const r = await dialog.showOpenDialog(win!, { properties: ["openDirectory"] });
+  return r.canceled ? null : r.filePaths[0];
+});
+
+ipcMain.handle(CH.fileRead, (_e, path: string) => fileSvc.read(path));
+ipcMain.handle(CH.fileWrite, (_e, path: string, content: string, mtimeMs?: number) =>
+  fileSvc.write(path, content, mtimeMs),
+);
+ipcMain.handle(CH.fileList, (_e, dir: string) => fileSvc.list(dir));
+ipcMain.handle(CH.filePick, async () => {
+  const { dialog } = await import("electron");
+  const r = await dialog.showOpenDialog(win!, { properties: ["openFile"] });
   return r.canceled ? null : r.filePaths[0];
 });
 
@@ -139,41 +152,40 @@ async function runSmoke(): Promise<void> {
     const js = (code: string) => win!.webContents.executeJavaScript(code);
     const clickBtn = (re: string) =>
       js(`[...document.querySelectorAll("button")].find(b=>${re}.test(b.innerText))?.click(), 1`);
-    const paneOrder = () =>
-      js(`[...document.querySelectorAll("[data-pane]")].map(e=>e.getAttribute("data-pane")+":"+Math.round(e.getBoundingClientRect().left)).join(",")`);
 
-    // Build a 3-pane layout via the toolbar.
-    await clickBtn("/\\bSplit\\b(?!\\s*down)/"); await sleep(1000);
-    await clickBtn("/\\bGit\\b/"); await sleep(1500);
     const seq: Record<string, unknown> = {};
+    // Open an editor pane via the toolbar.
+    await clickBtn("/\\bEditor\\b/"); await sleep(3000);
     seq.panes = await js(`document.querySelectorAll("[data-pane]").length`);
-    seq.before = await paneOrder();
+    seq.treeFiles = await js(`document.body.innerText.split("\\n").filter(l=>/\\.ts$|\\.json$|package/.test(l)).length`);
 
-    // The rail must exist and be empty.
-    seq.rail = await js(`!!document.body.innerText.match(/STATS/)`);
-    seq.railEmpty = await js(`!!document.body.innerText.match(/widgets go here/)`);
-
-    // Drag the LAST pane's header onto the FIRST pane's left edge.
-    seq.drag = await js(`(() => {
-      const panes = [...document.querySelectorAll("[data-pane]")];
-      if (panes.length < 2) return "too-few";
-      const src = panes[panes.length - 1];
-      const dst = panes[0];
-      const handle = src.querySelector("[title='Drag to move this pane']");
-      if (!handle) return "no-handle";
-      const hb = handle.getBoundingClientRect();
-      const db = dst.getBoundingClientRect();
-      const opts = (x, y) => ({ pointerId: 1, bubbles: true, cancelable: true,
-                                clientX: x, clientY: y, button: 0, isPrimary: true });
-      handle.dispatchEvent(new PointerEvent("pointerdown", opts(hb.left + 6, hb.top + 6)));
-      const host = dst.parentElement;
-      // Land near the LEFT edge of the first pane -> should insert before it.
-      host.dispatchEvent(new PointerEvent("pointermove", opts(db.left + db.width * 0.05, db.top + db.height / 2)));
-      host.dispatchEvent(new PointerEvent("pointerup",   opts(db.left + db.width * 0.05, db.top + db.height / 2)));
-      return "dispatched";
+    // Click a real file in the tree, then confirm Monaco mounted with content.
+    seq.opened = await js(`(() => {
+      const rows = [...document.querySelectorAll("div")].filter(d =>
+        d.childElementCount === 2 && /package\\.json$/.test(d.innerText.trim()));
+      if (!rows.length) return "no-row";
+      rows[0].click();
+      return "clicked";
     })()`);
-    await sleep(1200);
-    seq.after = await paneOrder();
+    await sleep(2500);
+    seq.monacoMounted = await js(`!!document.querySelector(".monaco-editor")`);
+    seq.hasLines = await js(`document.querySelectorAll(".view-line").length`);
+    seq.firstLine = await js(`document.querySelector(".view-line")?.innerText?.slice(0,40) ?? null`);
+    seq.tabShown = await js(`!!document.body.innerText.match(/package\\.json/)`);
+
+    // --- save round-trip, against a throwaway file ---
+    const edited = process.env.TH_SMOKE_FILE;
+    if (edited) {
+      const r = await fileSvc.read(edited);
+      seq.readBack = r.content.trim();
+      const w = await fileSvc.write(edited, "EDITED BY TEST\n", r.mtimeMs);
+      seq.saved = w.ok;
+      seq.afterSave = (await fileSvc.read(edited)).content.trim();
+      // A stale mtime must be refused, not silently clobbered.
+      const stale = await fileSvc.write(edited, "SHOULD NOT LAND\n", r.mtimeMs);
+      seq.staleRefused = stale.conflict === true;
+      seq.stillCorrect = (await fileSvc.read(edited)).content.trim();
+    }
     v.click = seq;
     await sleep(4000);
     v.paneCount = await win!.webContents.executeJavaScript(

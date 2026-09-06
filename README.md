@@ -51,6 +51,8 @@ widgets will live.
 | `⌘↵` | split right, running `claude` |
 | `⌘J` | split down, running `claude` |
 | `⌘G` | split right, git status + diff |
+| `⌘E` | split right, file editor |
+| `⌘S` | save the focused editor |
 | `⌘W` | close pane |
 | `⌘T` | new tab |
 | `⌘1..9` | switch tab |
@@ -62,7 +64,7 @@ Drag a divider to resize. Click a pane to focus it.
 ```
 app shell      tabs · keymap                 src/renderer/App.tsx
 layout engine  split tree · geometry         src/shared/layout.ts   (pure, tested)
-pane kinds     terminal · git                src/renderer/panes/
+pane kinds     terminal · git · editor       src/renderer/panes/
 services       pty · store                   src/main/
 ```
 
@@ -90,6 +92,14 @@ silently, no error. Node only.
 **The preload cannot import shared modules.** Electron loads it as a single
 file with no module resolution, so channel names are duplicated in
 `src/main/preload.ts`; `test/ipc-contract.test.ts` keeps the copy honest.
+
+**Monaco workers need relative paths under Rolldown.** Vite's `?worker` suffix
+does not resolve against a package's `exports` map, so the five Monaco workers
+are imported via `../../../node_modules/monaco-editor/...`. Without them the
+editor renders but every language feature silently does nothing.
+
+**Editor saves are guarded by mtime.** An agent editing the same file produces
+a visible conflict instead of a silent overwrite — see `FileService.write`.
 
 **Never start a PTY at a degenerate size.** A pane that has not been laid out
 reports 0x0; a 2x2 pty makes a full-screen TUI draw one frame and wedge. PTYs

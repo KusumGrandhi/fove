@@ -28,4 +28,8 @@ export const CH = {
   openInEditor: "open:editor",
   revealInFinder: "open:finder",
   pickFolder: "dialog:folder",
+  fileRead: "file:read",
+  fileWrite: "file:write",
+  fileList: "file:list",
+  filePick: "dialog:file",
 } as const;

@@ -25,6 +25,10 @@ const CH = {
   openInEditor: "open:editor",
   revealInFinder: "open:finder",
   pickFolder: "dialog:folder",
+  fileRead: "file:read",
+  fileWrite: "file:write",
+  fileList: "file:list",
+  filePick: "dialog:file",
 } as const;
 
 interface SpawnRequest {
@@ -68,6 +72,12 @@ const api = {
     ipcRenderer.send(CH.openInEditor, file, line),
   revealInFinder: (file: string): void => ipcRenderer.send(CH.revealInFinder, file),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke(CH.pickFolder),
+
+  fileRead: (path: string): Promise<unknown> => ipcRenderer.invoke(CH.fileRead, path),
+  fileWrite: (path: string, content: string, mtimeMs?: number): Promise<unknown> =>
+    ipcRenderer.invoke(CH.fileWrite, path, content, mtimeMs),
+  fileList: (dir: string): Promise<unknown[]> => ipcRenderer.invoke(CH.fileList, dir),
+  filePick: (): Promise<string | null> => ipcRenderer.invoke(CH.filePick),
 
   loadLayout: (): Promise<unknown> => ipcRenderer.invoke(CH.layoutLoad),
   saveLayout: (state: unknown): void => ipcRenderer.send(CH.layoutSave, state),
