@@ -14,8 +14,7 @@
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "sign:adhoc": "codesign --force --deep --sign - release/mac-arm64/fove.app && codesign -dv release/mac-arm64/fove.app",
-    "install:local": "npm run pack && codesign --force --deep --sign - release/mac-arm64/fove.app && rm -rf /Applications/fove.app && cp -R release/mac-arm64/fove.app /Applications/ && codesign --force --deep --sign - /Applications/fove.app && echo 'Installed. Run: npm run approve:local  (once, for double-click launch)'",
-    "approve:local": "sudo spctl --add --label fove /Applications/fove.app && sudo spctl --enable --label fove && spctl -a -t exec -vv /Applications/fove.app"
+    "install:local": "npm run pack && codesign --force --deep --sign - release/mac-arm64/fove.app && rm -rf /Applications/fove.app && cp -R release/mac-arm64/fove.app /Applications/ && codesign --force --deep --sign - /Applications/fove.app && echo 'Installed to /Applications. Double-click launch is not yet working -- see README.'"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

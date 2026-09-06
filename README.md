@@ -17,18 +17,32 @@ npm run dev          # build + launch
 
 ```bash
 npm run install:local   # build, sign ad-hoc, copy to /Applications
-npm run approve:local   # ONCE: tell Gatekeeper this app is allowed (needs sudo)
 ```
 
-Then open fove from Spotlight or the Applications folder like any other app.
 `npm run dist` additionally produces `release/fove-<version>-arm64.dmg`.
 
-**Why the extra approval step.** The app is signed ad-hoc, not with a paid
-Apple Developer ID. Running the binary directly always works, but launching it
-by double-click goes through launchd, which asks Gatekeeper first -- and
-Gatekeeper rejects anything without a Developer ID. `approve:local` registers a
-local exception; a downloaded copy on someone else's machine would need
-right-click -> Open, or a real signing identity.
+**Launching it — unresolved.** The bundle itself is good: run the binary
+directly and everything works.
+
+```bash
+/Applications/fove.app/Contents/MacOS/fove
+```
+
+Double-click and `open -a` currently do not launch it. The app is signed
+ad-hoc rather than with an Apple Developer ID, and `spctl -a` reports
+`rejected`. Going through launchd it exits without a window; running the same
+binary directly is fine.
+
+What has been ruled out so far: there is no `com.apple.quarantine` attribute to
+strip (only `com.apple.provenance`, which is SIP-protected), `spctl --add` was
+removed in macOS 26 so a local Gatekeeper exception can no longer be
+registered that way, and there are no code-signing identities in the keychain.
+No `syspolicyd` denial is logged either, so this may not be a Gatekeeper
+rejection at all -- the next step is to capture the app's own stderr under
+launchd before assuming a cause.
+
+Likely real fixes, in order of effort: a self-signed certificate trusted in the
+login keychain, or an Apple Developer ID for a proper signature.
 
 Two packaging traps already paid for:
 
