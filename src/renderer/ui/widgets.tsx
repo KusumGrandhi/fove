@@ -86,6 +86,14 @@ export function TokensWidget(props: { snap: Snapshot | null }) {
       ) : (
         <>
           <div style={W.bigNum}>{fmtTokens(total)}</div>
+          {!t.wholeTree && (
+            // Without a result message these are main-loop figures only: any
+            // subagent's tokens are missing. Say so rather than presenting a
+            // partial number as a total.
+            <div style={W.caveat} title="No result record in this transcript, so subagent tokens are not included.">
+              main loop only · excludes subagents
+            </div>
+          )}
           <Row label="input" value={fmtTokens(t.inputTokens)} />
           <Row label="output" value={fmtTokens(t.outputTokens)} />
           <Row label="cache read" value={fmtTokens(t.cacheReadTokens)} />
@@ -191,6 +199,7 @@ const W: Record<string, React.CSSProperties> = {
   bigNum: { fontSize: 21, color: C.fg, lineHeight: "26px", fontVariantNumeric: "tabular-nums" },
   row: { display: "flex", fontSize: 11, lineHeight: "17px" },
   note: { fontSize: 10, color: C.faint, marginBottom: 4 },
+  caveat: { fontSize: 10, color: "#d29922", marginBottom: 6, cursor: "help" },
   empty: { fontSize: 11, color: "#33333c", padding: "6px 0" },
   barTrack: { height: 3, background: "#1e1e26", borderRadius: 2, margin: "7px 0 4px" },
   barFill: { height: "100%", background: C.green, borderRadius: 2 },

@@ -40,6 +40,7 @@ import { ClaudeSessionService, toWire } from "./claudeSession.js";
 import { TeamService } from "./teams.js";
 import { backgroundSessions } from "./sessions.js";
 import { IdeService } from "./ide.js";
+import { GitWriteService } from "./gitWrite.js";
 import { readClaudeJson } from "../data/config/claudeJson.js";
 import { listSkills, sortSkills, budget, orphanUsage } from "../data/config/skills.js";
 import { listMemories } from "../data/config/memory.js";
@@ -188,6 +189,34 @@ ipcMain.handle(CH.skillsToggle, async (_e, name: string, current?: string) => {
   return true;
 });
 ipcMain.handle(CH.memoryList, () => listMemories());
+
+// ---- git write ------------------------------------------------------------
+// Mutating commands. Each returns git's own stderr on failure so the UI can
+// show the real reason -- a rejected push or a failing hook -- rather than a
+// summary of it.
+const gitw = new GitWriteService();
+
+ipcMain.handle(CH.gitStage, (_e, cwd: string, paths: string[]) => gitw.stage(cwd, paths));
+ipcMain.handle(CH.gitUnstage, (_e, cwd: string, paths: string[]) => gitw.unstage(cwd, paths));
+ipcMain.handle(CH.gitDiscard, (_e, cwd: string, paths: string[]) => gitw.discard(cwd, paths));
+ipcMain.handle(CH.gitCommit, (_e, cwd: string, message: string, opts?: { amend?: boolean; noVerify?: boolean }) =>
+  gitw.commit(cwd, message, opts ?? {}),
+);
+ipcMain.handle(CH.gitPush, (_e, cwd: string, opts?: Parameters<GitWriteService["push"]>[1]) =>
+  gitw.push(cwd, opts ?? {}),
+);
+ipcMain.handle(CH.gitPull, (_e, cwd: string, opts?: { rebase?: boolean }) => gitw.pull(cwd, opts ?? {}));
+ipcMain.handle(CH.gitFetch, (_e, cwd: string) => gitw.fetch(cwd));
+ipcMain.handle(CH.gitStashPush, (_e, cwd: string, message?: string, untracked?: boolean) =>
+  gitw.stashPush(cwd, message, untracked ?? false),
+);
+ipcMain.handle(CH.gitStashPop, (_e, cwd: string, ref?: string) => gitw.stashPop(cwd, ref));
+ipcMain.handle(CH.gitStashApply, (_e, cwd: string, ref?: string) => gitw.stashApply(cwd, ref));
+ipcMain.handle(CH.gitStashDrop, (_e, cwd: string, ref?: string) => gitw.stashDrop(cwd, ref));
+ipcMain.handle(CH.gitStashList, (_e, cwd: string) => gitw.stashList(cwd));
+ipcMain.handle(CH.gitCommits, (_e, cwd: string, limit?: number) => gitw.log(cwd, limit ?? 200));
+ipcMain.handle(CH.gitBlame, (_e, cwd: string, path: string) => gitw.blame(cwd, path));
+ipcMain.handle(CH.gitBranches, (_e, cwd: string) => gitw.branches(cwd));
 
 ipcMain.handle(CH.bgSessions, (_e, cwd: string) => backgroundSessions(cwd));
 

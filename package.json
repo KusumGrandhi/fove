@@ -83,10 +83,12 @@
         "LSMinimumSystemVersion": "11.0"
       },
       "identity": null,
-      "gatekeeperAssess": false
+      "gatekeeperAssess": false,
+      "icon": "build/icon.icns"
     },
     "dmg": {
-      "title": "fove ${version}"
+      "title": "fove ${version}",
+      "icon": "build/icon.icns"
     }
   }
 }

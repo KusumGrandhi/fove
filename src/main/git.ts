@@ -1,5 +1,10 @@
 /**
- * Git service. Read-only in Phase 2: it observes a repository, never mutates it.
+ * Git service.
+ *
+ * Read operations observe a repository; write operations (stage, commit,
+ * stash, push) mutate it. Every write returns the command's real stderr on
+ * failure rather than a generic message -- git's own errors are the useful
+ * ones, and a hook that rejects a commit must be readable by the user.
  *
  * Commands run with `-z` / `--porcelain` wherever git offers it, and arguments
  * are passed as an array (never a shell string), so paths containing spaces,

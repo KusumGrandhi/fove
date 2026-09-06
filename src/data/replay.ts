@@ -84,6 +84,9 @@ export async function replaySession(session: SessionSummary): Promise<ReplayResu
   }
 
   tree.finalize();
+  // A CLI transcript has no result record, so output tokens only exist as the
+  // per-step figures gathered above.
+  usage.settle();
   return {
     tree,
     usage,

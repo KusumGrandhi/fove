@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FileChange, FileDiff, RepoStatus, Worktree } from "../../shared/git-parse.js";
 import { statusLabel } from "../../shared/git-parse.js";
+import { GitActions } from "./GitActions.js";
 
 const C = {
   bg: "#0d0d11", panel: "#14141a", line: "#22222a",
@@ -91,6 +92,14 @@ export function GitStatusPane(props: { cwd: string }) {
         <span style={{ flex: 1 }} />
         <span style={{ color: C.faint }}>{status?.files.length ?? 0} changed</span>
       </div>
+
+      <GitActions
+        root={root}
+        branch={status?.branch}
+        staged={(status?.files ?? []).filter((f) => f.staged !== null).map((f) => f.path)}
+        unstaged={(status?.files ?? []).filter((f) => f.unstaged !== null).map((f) => f.path)}
+        onChanged={() => void refresh()}
+      />
 
       <div style={S.split}>
         <div style={S.list}>

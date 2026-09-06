@@ -66,3 +66,60 @@ describe("helpers", () => {
     expect(formatTokens(42)).toBe("42");
   });
 });
+
+describe("output tokens in transcripts with no result record", () => {
+  const usage = (o: Partial<Record<string, number>>) => ({
+    input_tokens: 0, output_tokens: 0,
+    cache_read_input_tokens: 0, cache_creation_input_tokens: 0, ...o,
+  });
+
+  test("a CLI transcript still reports output -- the reason the panel read 0", () => {
+    // No addResult(): modelUsage appears zero times in a real CLI transcript.
+    const u = new UsageAccumulator();
+    u.addStep("msg_a", usage({ input_tokens: 2, output_tokens: 994 }));
+    u.addStep("msg_b", usage({ input_tokens: 3, output_tokens: 1016 }));
+    u.settle();
+    expect(u.totals.outputTokens).toBe(2010);
+  });
+
+  test("a repeated message id is counted once -- parallel tool calls repeat it", () => {
+    const u = new UsageAccumulator();
+    u.addStep("msg_a", usage({ output_tokens: 994 }));
+    u.addStep("msg_a", usage({ output_tokens: 994 }));
+    u.addStep("msg_a", usage({ output_tokens: 994 }));
+    u.settle();
+    expect(u.totals.outputTokens).toBe(994);
+  });
+
+  test("an authoritative modelUsage figure is never inflated by per-step counts", () => {
+    const u = new UsageAccumulator();
+    u.addStep("msg_a", usage({ output_tokens: 994 }));
+    u.addResult({ "claude-opus-5": {
+      inputTokens: 10, outputTokens: 5000,
+      cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.1,
+    } });
+    u.settle();
+    // The result message wins outright; the placeholder is discarded.
+    expect(u.totals.outputTokens).toBe(5000);
+    expect(u.totals.wholeTree).toBe(true);
+  });
+
+  test("settle is idempotent", () => {
+    const u = new UsageAccumulator();
+    u.addStep("msg_a", usage({ output_tokens: 100 }));
+    u.settle(); u.settle(); u.settle();
+    expect(u.totals.outputTokens).toBe(100);
+  });
+
+  test("input and cache totals are unaffected", () => {
+    const u = new UsageAccumulator();
+    u.addStep("msg_a", usage({
+      input_tokens: 2, output_tokens: 994,
+      cache_read_input_tokens: 57028, cache_creation_input_tokens: 1062,
+    }));
+    u.settle();
+    expect(u.totals.inputTokens).toBe(2);
+    expect(u.totals.cacheReadTokens).toBe(57028);
+    expect(u.totals.cacheCreationTokens).toBe(1062);
+  });
+});

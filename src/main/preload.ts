@@ -22,6 +22,21 @@ const CH = {
   gitUntrackedDiff: "git:untracked-diff",
   gitLog: "git:log",
   gitRoot: "git:root",
+  gitStage: "git:stage",
+  gitUnstage: "git:unstage",
+  gitDiscard: "git:discard",
+  gitCommit: "git:commit",
+  gitPush: "git:push",
+  gitPull: "git:pull",
+  gitFetch: "git:fetch",
+  gitStashPush: "git:stash-push",
+  gitStashPop: "git:stash-pop",
+  gitStashApply: "git:stash-apply",
+  gitStashDrop: "git:stash-drop",
+  gitStashList: "git:stash-list",
+  gitCommits: "git:commits",
+  gitBlame: "git:blame",
+  gitBranches: "git:branches",
   openInEditor: "open:editor",
   revealInFinder: "open:finder",
   pickFolder: "dialog:folder",
@@ -103,6 +118,35 @@ const api = {
   skillsToggle: (name: string, current?: string): Promise<boolean> =>
     ipcRenderer.invoke(CH.skillsToggle, name, current),
   memoryList: (): Promise<unknown[]> => ipcRenderer.invoke(CH.memoryList),
+
+// ---- git write ----------------------------------------------------------
+  gitStage: (cwd: string, paths: string[]): Promise<unknown> =>
+    ipcRenderer.invoke(CH.gitStage, cwd, paths),
+  gitUnstage: (cwd: string, paths: string[]): Promise<unknown> =>
+    ipcRenderer.invoke(CH.gitUnstage, cwd, paths),
+  gitDiscard: (cwd: string, paths: string[]): Promise<unknown> =>
+    ipcRenderer.invoke(CH.gitDiscard, cwd, paths),
+  gitCommit: (cwd: string, message: string, opts?: unknown): Promise<unknown> =>
+    ipcRenderer.invoke(CH.gitCommit, cwd, message, opts),
+  gitPush: (cwd: string, opts?: unknown): Promise<unknown> =>
+    ipcRenderer.invoke(CH.gitPush, cwd, opts),
+  gitPull: (cwd: string, opts?: unknown): Promise<unknown> =>
+    ipcRenderer.invoke(CH.gitPull, cwd, opts),
+  gitFetch: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.gitFetch, cwd),
+  gitStashPush: (cwd: string, message?: string, untracked?: boolean): Promise<unknown> =>
+    ipcRenderer.invoke(CH.gitStashPush, cwd, message, untracked),
+  gitStashPop: (cwd: string, ref?: string): Promise<unknown> =>
+    ipcRenderer.invoke(CH.gitStashPop, cwd, ref),
+  gitStashApply: (cwd: string, ref?: string): Promise<unknown> =>
+    ipcRenderer.invoke(CH.gitStashApply, cwd, ref),
+  gitStashDrop: (cwd: string, ref?: string): Promise<unknown> =>
+    ipcRenderer.invoke(CH.gitStashDrop, cwd, ref),
+  gitStashList: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.gitStashList, cwd),
+  gitCommits: (cwd: string, limit?: number): Promise<unknown[]> =>
+    ipcRenderer.invoke(CH.gitCommits, cwd, limit),
+  gitBlame: (cwd: string, path: string): Promise<unknown[]> =>
+    ipcRenderer.invoke(CH.gitBlame, cwd, path),
+  gitBranches: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.gitBranches, cwd),
 
   bgSessions: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.bgSessions, cwd),
 

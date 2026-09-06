@@ -67,6 +67,8 @@ export function cacheHitRatio(u: Usage): number | undefined {
 export class UsageAccumulator {
   private readonly totals = emptyTotals();
   private readonly seenMessageIds = new Set<string>();
+  /** Per-step output, kept apart from authoritative modelUsage figures. */
+  private stepOutputTokens = 0;
 
   get current(): UsageTotals {
     return this.totals;
@@ -108,10 +110,21 @@ export class UsageAccumulator {
   }
 
   /**
-   * Fold in a per-step assistant message. Input and cache tokens only -- output
-   * is a placeholder here and is corrected by addResult(). Used for the live
-   * in-flight readout before a result message lands, and for historical replay
-   * of transcripts that have no result record.
+   * Fold in a per-step assistant message. Used for the live in-flight readout
+   * before a result message lands, and for historical replay of transcripts
+   * that have no result record.
+   *
+   * Output tokens are accumulated *separately* from `totals.outputTokens`.
+   * They are a placeholder in the SDK -- the count at message_start, corrected
+   * later by addResult() -- so they must never be added to an authoritative
+   * modelUsage figure. But a CLI transcript contains no result record at all
+   * (`modelUsage` appears zero times in ~/.claude/projects/**.jsonl), so
+   * without this the output column reads 0 for every historical session.
+   * `settle()` picks whichever source is real.
+   *
+   * The dedup matters for output specifically: parallel tool calls repeat the
+   * same message id with identical usage, so the same output figure appears
+   * several times and naive summing over-counts.
    */
   addStep(messageId: string | undefined, usage: Usage | undefined): void {
     if (!usage) return;
@@ -122,6 +135,21 @@ export class UsageAccumulator {
     this.totals.inputTokens += usage.input_tokens ?? 0;
     this.totals.cacheReadTokens += usage.cache_read_input_tokens ?? 0;
     this.totals.cacheCreationTokens += usage.cache_creation_input_tokens ?? 0;
+    this.stepOutputTokens += usage.output_tokens ?? 0;
+  }
+
+  /**
+   * Resolve output tokens from the best source available.
+   *
+   * A result message (`modelUsage`) is authoritative and covers the whole
+   * agent tree. Failing that -- every CLI transcript -- fall back to the
+   * summed per-step counts, which are the only output figures those files
+   * carry. Call once after replaying a session.
+   */
+  settle(): void {
+    if (this.totals.outputTokens === 0 && this.stepOutputTokens > 0) {
+      this.totals.outputTokens = this.stepOutputTokens;
+    }
   }
 
   /** Live output count from a streaming message_delta event. */
