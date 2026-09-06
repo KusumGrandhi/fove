@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Workspace } from "./layout/Workspace.js";
 import { TerminalPane } from "./panes/Terminal.js";
 import { GitStatusPane } from "./panes/GitStatus.js";
+import { C, Divider, ToolButton } from "./ui/Chrome.js";
 import {
   closePane, isValid, leaf, newId, paneIds, split, type Dir, type Node,
 } from "../shared/layout.js";
@@ -178,77 +179,176 @@ export function App() {
 
   if (!active) return <div style={S.boot}>starting…</div>;
 
+  const paneCount = Object.keys(active.panes).length;
+
   return (
     <div style={S.app}>
-      <div style={S.tabbar}>
-        <div style={S.dragRegion} />
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setActiveTabId(t.id)}
-            style={{ ...S.tab, ...(t.id === activeTabId ? S.tabActive : null) }}
-          >
-            {t.name}
-          </button>
-        ))}
-        <button onClick={addTab} style={S.tabAdd} title="New tab (⌘T)">+</button>
-        <div style={S.spacer} />
-        <span style={S.hint}>⌘D split · ⌘⇧D down · ⌘↵ claude · ⌘G git · ⌘W close</span>
+      {/* --- title bar: window controls area + tabs --- */}
+      <div style={S.titlebar}>
+        <div style={S.tabs}>
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setActiveTabId(t.id)}
+              style={{ ...S.tab, ...(t.id === activeTabId ? S.tabActive : null) }}
+              title={`Tab ${t.name}`}
+            >
+              {t.name}
+            </button>
+          ))}
+          <button onClick={addTab} style={S.tabAdd} title="New tab (⌘T)">+</button>
+        </div>
+        <div style={S.grow} />
+        <span style={S.appName}>terminal-helper</span>
       </div>
 
-      <div style={S.body}>
-        <Workspace
-          tree={active.tree}
-          focusedPaneId={active.focusedPaneId}
-          onFocusPane={(paneId) => updateTab(active.id, (t) => ({ ...t, focusedPaneId: paneId }))}
-          onTreeChange={(tree) => updateTab(active.id, (t) => ({ ...t, tree }))}
-          renderPane={(paneId, focused) => {
-            const spec = active.panes[paneId];
-            if (!spec) return null;
-            if (spec.kind === "git") {
-              return <GitStatusPane cwd={spec.cwd ?? cwdOf(active)} />;
-            }
-            return (
-              <TerminalPane
-                paneId={paneId}
-                focused={focused}
-                cwd={spec.cwd}
-                cmd={spec.kind === "claude" ? "claude" : undefined}
-                args={spec.kind === "claude" ? [] : undefined}
-              />
-            );
-          }}
+      {/* --- toolbar: every shortcut, clickable --- */}
+      <div style={S.toolbar}>
+        <ToolButton label="Split" hint="⌘D" icon="▊▊" onClick={() => doSplit("row")} />
+        <ToolButton label="Split down" hint="⌘⇧D" icon="▤" onClick={() => doSplit("column")} />
+        <Divider />
+        <ToolButton label="Claude" hint="⌘↵" icon="✳" onClick={() => doSplit("row", "claude")} />
+        <ToolButton label="Shell" icon="❯" onClick={() => doSplit("row", "shell")} />
+        <ToolButton label="Git" hint="⌘G" icon="⎇" onClick={() => doSplit("row", "git")} />
+        <Divider />
+        <ToolButton label="New tab" hint="⌘T" icon="＋" onClick={addTab} />
+        <div style={S.grow} />
+        <ToolButton
+          label="Close pane"
+          hint="⌘W"
+          icon="✕"
+          danger
+          onClick={doClosePane}
+          disabled={paneCount <= 1 && tabs.length <= 1}
         />
+      </div>
+
+      {/* --- the panes live inside this frame --- */}
+      <div style={S.stage}>
+        <div style={S.workspace}>
+          <Workspace
+            tree={active.tree}
+            focusedPaneId={active.focusedPaneId}
+            onFocusPane={(paneId) => updateTab(active.id, (t) => ({ ...t, focusedPaneId: paneId }))}
+            onTreeChange={(tree) => updateTab(active.id, (t) => ({ ...t, tree }))}
+            renderPane={(paneId, focused) => {
+              const spec = active.panes[paneId];
+              if (!spec) return null;
+              return (
+                <div style={S.paneBox}>
+                  <div style={{ ...S.paneHeader, ...(focused ? S.paneHeaderActive : null) }}>
+                    <span style={{ color: focused ? C.fg : C.faint }}>
+                      {spec.kind === "claude" ? "✳ claude" : spec.kind === "git" ? "⎇ git" : "❯ shell"}
+                    </span>
+                    <div style={S.grow} />
+                    <button
+                      style={S.paneClose}
+                      title="Close this pane"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        updateTab(active.id, (t) => ({ ...t, focusedPaneId: paneId }));
+                        setTimeout(doClosePane, 0);
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div style={S.paneBody}>
+                    {spec.kind === "git" ? (
+                      <GitStatusPane cwd={spec.cwd ?? cwdOf(active)} />
+                    ) : (
+                      <TerminalPane
+                        paneId={paneId}
+                        focused={focused}
+                        cwd={spec.cwd}
+                        cmd={spec.kind === "claude" ? "claude" : undefined}
+                        args={spec.kind === "claude" ? [] : undefined}
+                      />
+                    )}
+                  </div>
+                </div>
+              );
+            }}
+          />
+        </div>
+      </div>
+
+      {/* --- status bar --- */}
+      <div style={S.statusbar}>
+        <span>{paneCount} pane{paneCount === 1 ? "" : "s"}</span>
+        <Divider />
+        <span>tab {active.name} of {tabs.length}</span>
+        <div style={S.grow} />
+        <span style={{ color: C.faint }}>drag a divider to resize</span>
       </div>
     </div>
   );
 }
 
 const S: Record<string, React.CSSProperties> = {
-  app: { display: "flex", flexDirection: "column", height: "100vh", background: "#101014", color: "#d8d8dc" },
-  boot: { padding: 20, fontFamily: "system-ui", color: "#6b6b72" },
-  tabbar: {
-    display: "flex", alignItems: "center", gap: 4, padding: "6px 10px 6px 84px",
-    background: "#16161c", borderBottom: "1px solid #24242c",
-    fontFamily: "system-ui", fontSize: 12,
-    // @ts-expect-error Electron-specific CSS property
+  app: {
+    display: "flex", flexDirection: "column", height: "100vh",
+    background: C.bg, color: C.fg, fontFamily: "system-ui", fontSize: 12,
+    overflow: "hidden",
+  },
+  boot: { padding: 20, fontFamily: "system-ui", color: C.faint },
+  grow: { flex: 1 },
+
+  // Title bar. Left padding clears the macOS traffic lights.
+  titlebar: {
+    display: "flex", alignItems: "center", gap: 8,
+    height: 38, padding: "0 12px 0 82px",
+    background: C.chrome, borderBottom: `1px solid ${C.line}`,
+    flexShrink: 0,
     WebkitAppRegion: "drag",
-  },
-  dragRegion: { flex: "0 0 0" },
+  } as React.CSSProperties,
+  appName: { color: C.faint, fontSize: 11, letterSpacing: 0.3 },
+  tabs: { display: "flex", alignItems: "center", gap: 3 },
   tab: {
-    padding: "3px 12px", borderRadius: 5, border: "1px solid transparent",
-    background: "transparent", color: "#8a8a93", cursor: "pointer", fontSize: 12,
-    // @ts-expect-error Electron-specific CSS property
+    padding: "4px 14px", borderRadius: 6, border: "1px solid transparent",
+    background: "transparent", color: C.faint, cursor: "pointer", fontSize: 12,
     WebkitAppRegion: "no-drag",
-  },
-  tabActive: { background: "#24242c", color: "#e6e6ea", border: "1px solid #2f6feb" },
+  } as React.CSSProperties,
+  tabActive: { background: C.chromeHi, color: C.fg, border: `1px solid ${C.accent}` },
   tabAdd: {
-    padding: "3px 9px", borderRadius: 5, border: "none", background: "transparent",
-    color: "#6b6b72", cursor: "pointer", fontSize: 14,
-    // @ts-expect-error Electron-specific CSS property
+    padding: "3px 10px", borderRadius: 6, border: "none", background: "transparent",
+    color: C.faint, cursor: "pointer", fontSize: 15, lineHeight: "16px",
     WebkitAppRegion: "no-drag",
+  } as React.CSSProperties,
+
+  // Toolbar: every shortcut as a button.
+  toolbar: {
+    display: "flex", alignItems: "center", gap: 2,
+    padding: "5px 10px", background: C.chrome,
+    borderBottom: `1px solid ${C.line}`, flexShrink: 0,
   },
-  spacer: { flex: 1 },
-  hint: { color: "#4a4a52", fontSize: 11 },
-  body: { flex: 1, minHeight: 0, padding: 6 },
+
+  // The stage insets the panes so they read as content inside the app.
+  stage: { flex: 1, minHeight: 0, padding: 10, display: "flex" },
+  workspace: {
+    flex: 1, minWidth: 0, minHeight: 0,
+    background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10,
+    padding: 6, overflow: "hidden",
+  },
+
+  // Each pane gets a titled frame.
+  paneBox: { display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" },
+  paneHeader: {
+    display: "flex", alignItems: "center", gap: 6,
+    padding: "3px 8px", background: "#14141a",
+    borderBottom: `1px solid ${C.line}`, flexShrink: 0,
+    fontSize: 11, color: C.faint,
+  },
+  paneHeaderActive: { background: "#1a2333", borderBottom: `1px solid ${C.accent}` },
+  paneClose: {
+    background: "transparent", border: "none", color: C.faint,
+    cursor: "pointer", fontSize: 11, padding: "0 3px", lineHeight: 1,
+  },
+  paneBody: { flex: 1, minHeight: 0, overflow: "hidden" },
+
+  statusbar: {
+    display: "flex", alignItems: "center", gap: 6,
+    padding: "4px 12px", background: C.chrome,
+    borderTop: `1px solid ${C.line}`, color: C.dim, fontSize: 11, flexShrink: 0,
+  },
 };

@@ -13,6 +13,25 @@ npm install          # postinstall rebuilds node-pty for Electron's ABI
 npm run dev          # build + launch
 ```
 
+## UI
+
+```
+┌─ title bar ─────────────────── tabs · + ─────────┐
+├─ toolbar ── Split · Split down · Claude · Shell ·│
+│             Git · New tab            Close pane  │
+├──────────────────────────────────────────────────┤
+│  ┌─ workspace ────────────────────────────────┐  │
+│  │ ┌ ❯ shell ──────┐┌ ⎇ git ───────────────┐ │  │
+│  │ │               ││                      │ │  │
+│  │ └───────────────┘└──────────────────────┘ │  │
+│  └────────────────────────────────────────────┘  │
+├─ status bar ── 2 panes · tab 1 of 1 ─────────────┤
+└──────────────────────────────────────────────────┘
+```
+
+Every shortcut is also a toolbar button, and every pane has its own ✕. The
+panes sit inside a framed workspace rather than filling the window edge to edge.
+
 ## Keys
 
 | | |

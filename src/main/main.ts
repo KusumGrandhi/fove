@@ -136,10 +136,22 @@ async function runSmoke(): Promise<void> {
 
     // --- the pane renders inside the real window ---
     await sleep(3000);
-    await win!.webContents.executeJavaScript(
-      `window.dispatchEvent(new KeyboardEvent("keydown",{key:"g",metaKey:true,bubbles:true}))`,
-    );
-    await sleep(2500);
+    const clickBtn = async (re: string) =>
+      win!.webContents.executeJavaScript(
+        `[...document.querySelectorAll("button")].find(b=>${re}.test(b.innerText))?.click(), document.querySelectorAll("[data-pane]").length`,
+      );
+    const seq: Record<string, unknown> = {};
+    seq.start = await clickBtn("/never-matches/");
+    await clickBtn("/\\bSplit\\b(?!\\s*down)/"); await sleep(1200);
+    seq.afterSplit = await clickBtn("/never-matches/");
+    await clickBtn("/Split down/"); await sleep(1200);
+    seq.afterSplitDown = await clickBtn("/never-matches/");
+    await clickBtn("/\\bGit\\b/"); await sleep(1500);
+    seq.afterGit = await clickBtn("/never-matches/");
+    await clickBtn("/Close pane/"); await sleep(1200);
+    seq.afterClose = await clickBtn("/never-matches/");
+    v.click = seq;
+    await sleep(4000);
     v.paneCount = await win!.webContents.executeJavaScript(
       `document.querySelectorAll('[data-pane]').length`,
     ).catch(() => -1);
@@ -148,8 +160,9 @@ async function runSmoke(): Promise<void> {
     );
     // xterm draws to canvas, so the terminal pane contributes no innerText;
     // read the last pane that has any, which is the git pane.
-    const probe = readFileSync(join(__dirname, "../../../scripts/panetext.js"), "utf8");
-    v.gitPaneText = (await win!.webContents.executeJavaScript(probe)) as string;
+    const probe = `(()=>{const p=[...document.querySelectorAll('[data-pane]')];return JSON.stringify({panes:p.length,headers:p.map(e=>(e.innerText||"").split("\\n")[0].trim()).filter(Boolean)})})()`;
+    await sleep(2500);
+    v.after = (await win!.webContents.executeJavaScript(probe)) as string;
   } catch (e) {
     v.error = String(e);
   }
