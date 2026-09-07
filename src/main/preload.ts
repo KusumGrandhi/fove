@@ -53,6 +53,7 @@ const CH = {
   fsChanged: "fs:changed",
   wsRecipe: "ws:recipe",
   wsSaveRecipe: "ws:save-recipe",
+  wtList: "wt:list",
   wsCreate: "ws:create-worktree",
   wsApply: "ws:apply-recipe",
   popoutOpen: "popout:open",
@@ -155,6 +156,7 @@ const api = {
   wsRecipe: (repoRoot: string): Promise<unknown> => ipcRenderer.invoke(CH.wsRecipe, repoRoot),
   wsSaveRecipe: (repoRoot: string, recipe: unknown): Promise<unknown> =>
     ipcRenderer.invoke(CH.wsSaveRecipe, repoRoot, recipe),
+  wtList: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.wtList, cwd),
   wsCreate: (opts: unknown): Promise<unknown> => ipcRenderer.invoke(CH.wsCreate, opts),
   wsApply: (worktree: string, primary: string): Promise<unknown> =>
     ipcRenderer.invoke(CH.wsApply, worktree, primary),

@@ -58,6 +58,7 @@ export const CH = {
   fsChanged: "fs:changed",
   wsRecipe: "ws:recipe",
   wsSaveRecipe: "ws:save-recipe",
+  wtList: "wt:list",
   wsCreate: "ws:create-worktree",
   wsApply: "ws:apply-recipe",
   popoutOpen: "popout:open",

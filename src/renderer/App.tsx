@@ -19,6 +19,8 @@ import { ModelPicker, type Provider } from "./ui/ModelPicker.js";
 import { AgentsWidget, TokensWidget, useSnapshot } from "./ui/widgets.js";
 import { TeammateBar, TeammateView, useTeammates } from "./ui/Teammates.js";
 import { C, Divider, ToolButton } from "./ui/Chrome.js";
+import { Palette, type PaletteItem } from "./ui/Palette.js";
+import type { WorktreeStatus } from "../main/worktrees.js";
 import { THEMES, DEFAULT_THEME, applyTheme } from "./ui/themes.js";
 import { close as closeTab, insert as insertTab, setPinned } from "../shared/tabs.js";
 import {
@@ -240,17 +242,35 @@ export function App() {
     });
   }, []);
 
-  /** Worktrees of the active workspace, offered as one-click new tabs. */
-  const [worktrees, setWorktrees] = useState<{ path: string; branch?: string }[]>([]);
+  /**
+   * Worktrees of the active workspace, with live status.
+   *
+   * Refreshed whenever the palette opens rather than on a timer: the dirty
+   * count and the agent count are only interesting at the moment you are
+   * choosing where to go, and polling `git status` across five worktrees for a
+   * list nobody is looking at is work for nothing.
+   */
+  const [worktrees, setWorktrees] = useState<WorktreeStatus[]>([]);
+  const loadWorktrees = useCallback(async (cwd: string) => {
+    const w = (await window.th.wtList(cwd)) as WorktreeStatus[];
+    setWorktrees(w ?? []);
+  }, []);
   useEffect(() => {
-    if (!active?.cwd) return;
-    void (async () => {
-      const w = (await window.th.gitWorktrees(active.cwd)) as { path: string; branch?: string }[];
-      setWorktrees(w ?? []);
-    })();
-  }, [active?.cwd]);
+    if (active?.cwd) void loadWorktrees(active.cwd);
+  }, [active?.cwd, loadWorktrees]);
 
   // ---- keybindings ---------------------------------------------------------
+  /**
+   * The palette opener, reached through a ref.
+   *
+   * `openPalette` is declared further down (it needs the worktree loader), and
+   * a keybinding closure cannot capture a `const` that is not initialised yet.
+   * A ref sidesteps the ordering without moving unrelated code around, and
+   * keeps the handler out of the effect's dependency list -- the same shape the
+   * search pane's debounce needed.
+   */
+  const openPaletteRef = useRef<() => void>(() => {});
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -267,6 +287,7 @@ export function App() {
       else if (e.key === "m") { e.preventDefault(); setPickerOpen(true); }
       else if (e.key === "k") { e.preventDefault(); doSplit("row", "config"); }
       else if (e.key === "f" && e.shiftKey) { e.preventDefault(); doSplit("row", "search"); }
+      else if (e.key === "o" || e.key === "O") { e.preventDefault(); openPaletteRef.current(); }
       else if (e.key === "p" && e.shiftKey) { e.preventDefault(); togglePin(activeTabId); }
       else if (e.key === "p") { e.preventDefault(); if (active) togglePanePin(active.focusedPaneId); }
       else if (e.key === "Enter") { e.preventDefault(); doSplit("row", "claude"); }
@@ -441,6 +462,100 @@ export function App() {
     return off;
   }, [openInPane]);
 
+  // ---- command palette -----------------------------------------------------
+
+  /**
+   * Everything the palette can do: worktrees first, then commands.
+   *
+   * Worktrees lead because they are the reason the palette exists -- the
+   * question "where is my other checkout, and is anything happening in it" had
+   * no answer short of opening tabs until now. A worktree already open as a
+   * tab switches to it instead of opening a second copy, which is what makes
+   * the palette a *switcher* rather than a tab factory.
+   */
+  const paletteItems: PaletteItem[] = useMemo(() => {
+    const items: PaletteItem[] = [];
+
+    for (const w of worktrees) {
+      const open = tabs.find((t) => t.cwd === w.path);
+      const badges: { text: string; tone?: string }[] = [];
+      // Agents first: "something is running over there" is the fact that most
+      // often changes where you want to go.
+      if (w.agents > 0) badges.push({ text: `✳ ${w.agents}`, tone: C.accent });
+      if (w.dirty === undefined) badges.push({ text: "status unreadable", tone: C.faint });
+      else if (w.dirty > 0) badges.push({ text: `● ${w.dirty}`, tone: C.yellow });
+      if (w.ahead) badges.push({ text: `↑${w.ahead}`, tone: C.faint });
+      if (w.behind) badges.push({ text: `↓${w.behind}`, tone: C.faint });
+      if (w.locked) badges.push({ text: "locked", tone: C.faint });
+      if (w.prunable) badges.push({ text: "prunable", tone: C.red });
+
+      items.push({
+        id: `wt:${w.path}`,
+        label: w.branch ?? w.name,
+        // The path is searchable but not shown: `.warp/worktrees/core/AGENT`
+        // and `conductor/workspaces/core/cape-town` differ only deep in the
+        // path, so typing "warp" should find one of them.
+        keywords: w.path,
+        detail: w.path,
+        icon: w.detached ? "⌥" : "⎇",
+        badges,
+        hint: open ? (open.id === activeTabId ? "current" : "open") : w.name,
+        // The active workspace sorts to the top; it is the anchor the rest of
+        // the list is read against.
+        priority: w.current ? 2 : open ? 1 : 0,
+        run: () => {
+          if (open) setActiveTabId(open.id);
+          else void addTab(w.path, w.branch);
+        },
+      });
+    }
+
+    const cmd = (id: string, label: string, hint: string, run: () => void): PaletteItem =>
+      ({ id, label, icon: "›", hint, run });
+
+    items.push(
+      cmd("cmd:claude", "New Claude pane", "⌘↵", () => doSplit("row", "claude")),
+      cmd("cmd:shell", "New shell pane", "", () => doSplit("row", "shell")),
+      cmd("cmd:editor", "New editor pane", "⌘E", () => doSplit("row", "editor")),
+      cmd("cmd:git", "New git pane", "⌘G", () => doSplit("row", "git")),
+      cmd("cmd:agents", "New agents pane", "⌘R", () => doSplit("row", "agents")),
+      cmd("cmd:search", "Search the codebase", "⌘⇧F", () => doSplit("row", "search")),
+      cmd("cmd:config", "Open config", "⌘K", () => doSplit("row", "config")),
+      cmd("cmd:model", "Switch model", "⌘M", () => setPickerOpen(true)),
+      cmd("cmd:split", "Split right", "⌘D", () => doSplit("row")),
+      cmd("cmd:splitDown", "Split down", "⌘⇧D", () => doSplit("column")),
+      cmd("cmd:folder", "Open a folder as a workspace", "⌘T", () => void addTab()),
+      cmd("cmd:closePane", "Close pane", "⌘W", doClosePane),
+      cmd("cmd:pinTab", "Pin or unpin this workspace", "⌘⇧P", () => togglePin(activeTabId)),
+      cmd("cmd:theme", "Next theme", "", () => {
+        const i = THEMES.findIndex((t) => t.id === themeId);
+        setThemeId(THEMES[(i + 1) % THEMES.length]!.id);
+      }),
+    );
+    if (active) {
+      items.push(
+        cmd("cmd:pinPane", panePins.has(active.focusedPaneId) ? "Unpin pane" : "Pin pane", "⌘P",
+          () => togglePanePin(active.focusedPaneId)),
+        cmd("cmd:popout", popped.has(active.focusedPaneId) ? "Put pane back" : "Pop pane out", "",
+          () => {
+            const spec = active.panes[active.focusedPaneId];
+            togglePopout(active.focusedPaneId, spec?.title || spec?.kind || "pane");
+          }),
+      );
+    }
+    return items;
+  }, [worktrees, tabs, activeTabId, active, addTab, doSplit, doClosePane, togglePin,
+      togglePanePin, togglePopout, popped, panePins, themeId]);
+
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const openPalette = useCallback(() => {
+    // Refresh on open so the counts are current rather than whatever they were
+    // when the tab was last switched.
+    if (active?.cwd) void loadWorktrees(active.cwd);
+    setPaletteOpen(true);
+  }, [active?.cwd, loadWorktrees]);
+  openPaletteRef.current = openPalette;
+
   // Tell the main process which workspaces and editors are open, so the IDE
   // server can answer getWorkspaceFolders / getOpenEditors truthfully.
   useEffect(() => {
@@ -529,27 +644,7 @@ export function App() {
         />
         <Divider />
         <ToolButton label="Open folder" hint="⌘T" icon="＋" onClick={() => void addTab()} />
-        {worktrees.length > 1 && (
-          <select
-            value=""
-            onChange={(e) => {
-              const w = worktrees.find((x) => x.path === e.target.value);
-              if (w) void addTab(w.path, w.branch);
-              e.target.value = "";
-            }}
-            style={S.wtSelect}
-            title="Open a worktree as a new workspace"
-          >
-            <option value="">⎇ worktree…</option>
-            {worktrees
-              .filter((w) => w.path !== active.cwd)
-              .map((w) => (
-                <option key={w.path} value={w.path}>
-                  {w.branch ?? w.path.split("/").pop()}
-                </option>
-              ))}
-          </select>
-        )}
+        <ToolButton label="Go to…" hint="⌘O" icon="⎇" onClick={openPalette} />
         <div style={S.grow} />
         <ToolButton
           label="Close pane"
@@ -565,6 +660,14 @@ export function App() {
       <TeammateBar live={live} openId={openMateId} onOpen={setOpenMateId} />
       {openMate && team?.socket && (
         <TeammateView socket={team.socket} mate={openMate} onClose={() => setOpenMateId(null)} />
+      )}
+
+      {paletteOpen && (
+        <Palette
+          items={paletteItems}
+          empty={worktrees.length === 0 ? "not a git repository" : "nothing here"}
+          onClose={() => setPaletteOpen(false)}
+        />
       )}
 
       {pickerOpen && active && (

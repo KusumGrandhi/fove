@@ -305,7 +305,10 @@ in it.
    attaches to the running PTY, verified by scrollback written before the pop.
 4. ~~**Codebase search + linting** (§6a, §6b)~~ — **done**: streaming rg
    search with click-to-open, and ruff diagnostics as Monaco markers.
-5. **Worktree switcher** (§8) — assembly of facts fove already reads.
+5. ~~**Worktree switcher** (§8)~~ — **done**: a general command palette (⌘O)
+   listing every worktree with branch, dirty count, ahead/behind and live agent
+   count, plus every toolbar command. Switches to an already-open worktree
+   rather than opening it twice.
 6. **Browser pane** (§3) — self-contained, and compounds with the AI layer.
 7. **Debugger, Python only** (§2) — largest; started once the rest is stable.
 8. **Python LSP** (§6c) — after the debugger, which teaches the same

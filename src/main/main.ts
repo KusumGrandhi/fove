@@ -35,6 +35,7 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { PtyService } from "./pty.js";
 import { GitService } from "./git.js";
+import { WorktreeService } from "./worktrees.js";
 import { FileService } from "./files.js";
 import { ClaudeSessionService, toWire } from "./claudeSession.js";
 import { TeamService } from "./teams.js";
@@ -162,6 +163,7 @@ ipcMain.on(CH.ptyResize, (_e, paneId: string, cols: number, rows: number) =>
 ipcMain.on(CH.ptyKill, (_e, paneId: string) => ptys.kill(paneId));
 
 const gitSvc = new GitService();
+const worktreeSvc = new WorktreeService(gitSvc);
 const fileSvc = new FileService();
 const claudeSvc = new ClaudeSessionService();
 const teamSvc = new TeamService();
@@ -169,6 +171,7 @@ const teamSvc = new TeamService();
 ipcMain.handle(CH.gitRoot, (_e, cwd: string) => gitSvc.root(cwd));
 ipcMain.handle(CH.gitStatus, (_e, cwd: string) => gitSvc.status(cwd));
 ipcMain.handle(CH.gitWorktrees, (_e, cwd: string) => gitSvc.worktrees(cwd));
+ipcMain.handle(CH.wtList, (_e, cwd: string) => worktreeSvc.list(cwd));
 ipcMain.handle(CH.gitDiff, (_e, cwd: string, opts: Record<string, unknown>) =>
   gitSvc.diff(cwd, opts as never),
 );
