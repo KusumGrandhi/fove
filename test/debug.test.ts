@@ -13,10 +13,19 @@ import type { LaunchConfig } from "../src/shared/launch-config.js";
 const base: LaunchConfig = { name: "x", type: "debugpy", request: "launch" };
 
 describe("debugpyArgs", () => {
+  it("disables frozen modules, which make debugpy miss breakpoints", () => {
+    // debugpy warns about this itself on startup. A silently-skipped
+    // breakpoint is worse than a loud failure.
+    const args = debugpyArgs(base, 1);
+    expect(args[0]).toBe("-Xfrozen_modules=off");
+    // It is an interpreter flag, so it must precede -m.
+    expect(args.indexOf("-Xfrozen_modules=off")).toBeLessThan(args.indexOf("-m"));
+  });
+
   it("listens on loopback only", () => {
     // Binding all interfaces would expose a debugger port to the network.
     const args = debugpyArgs(base, 5678);
-    expect(args.slice(0, 4)).toEqual(["-m", "debugpy", "--listen", "127.0.0.1:5678"]);
+    expect(args.slice(1, 5)).toEqual(["-m", "debugpy", "--listen", "127.0.0.1:5678"]);
   });
 
   it("waits for the client, so nothing is missed at startup", () => {
@@ -30,6 +39,7 @@ describe("debugpyArgs", () => {
       args: ["run", "--no-debugger", "--no-reload"],
     };
     expect(debugpyArgs(config, 5678)).toEqual([
+      "-Xfrozen_modules=off",
       "-m", "debugpy", "--listen", "127.0.0.1:5678", "--wait-for-client",
       "-m", "flask",
       "run", "--no-debugger", "--no-reload",
@@ -58,6 +68,7 @@ describe("debugpyArgs", () => {
 
   it("works with no args at all", () => {
     expect(debugpyArgs({ ...base, program: "/w/a.py" }, 1)).toEqual([
+      "-Xfrozen_modules=off",
       "-m", "debugpy", "--listen", "127.0.0.1:1", "--wait-for-client", "/w/a.py",
     ]);
   });

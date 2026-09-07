@@ -16,23 +16,27 @@
  *
  * ## The sequence that matters
  *
- * DAP has one ordering rule that is easy to get wrong and produces a session
- * that connects and then does nothing:
+ * Observed against debugpy 1.8.21 rather than taken from the spec, because the
+ * spec does not make the ordering obvious and getting it wrong produces a
+ * session that connects and then does nothing:
  *
- *   initialize -> (wait for the `initialized` EVENT, not the response)
- *              -> setBreakpoints -> configurationDone -> the program runs
+ *   initialize
+ *     -> attach                 (send, but do NOT await its response)
+ *     -> wait for the `initialized` EVENT
+ *     -> setBreakpoints
+ *     -> configurationDone
+ *     -> only now does `attach` answer, and the program runs
  *
- * Breakpoints sent before `initialized` are dropped, and a `configurationDone`
- * that never arrives leaves the program paused forever at startup looking like
- * a hang. Both are pinned by tests.
+ * Three ways this fails silently, all of them seen:
+ *   - Awaiting the `attach` response before configuring deadlocks: debugpy
+ *     answers it only after `configurationDone`, which the client has not sent
+ *     yet. The first version did this and failed with "attach timed out".
+ *   - Breakpoints sent before `initialized` are dropped with no error.
+ *   - A missing `configurationDone` leaves the program paused at startup,
+ *     which is indistinguishable from a hang.
  *
- * ## Honesty about what is verified
- *
- * The protocol layer is tested against a fake adapter. `debugpy` is not
- * installed on this machine, so the end-to-end path -- a real breakpoint
- * actually stopping a real Flask request -- has NOT been run. Anything here
- * that touches the live process is written from the DAP specification, not
- * from an observed session.
+ * A fake adapter cannot catch the first of those -- it replies immediately --
+ * which is the argument for having tested against the real thing.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -117,7 +121,14 @@ async function connectWithRetry(port: number, timeoutMs: number): Promise<Socket
  * baffling failure -- is testable without spawning anything.
  */
 export function debugpyArgs(config: LaunchConfig, port: number): string[] {
-  const args = ["-m", "debugpy", "--listen", `127.0.0.1:${port}`, "--wait-for-client"];
+  const args = [
+    // debugpy warns on startup that frozen modules "may make the debugger miss
+    // breakpoints" and asks for exactly this flag. A debugger that silently
+    // skips a breakpoint is worse than one that fails loudly, so it is passed
+    // rather than left to chance. Interpreter flag, so it precedes -m.
+    "-Xfrozen_modules=off",
+    "-m", "debugpy", "--listen", `127.0.0.1:${port}`, "--wait-for-client",
+  ];
   // `-m flask` and a script path are alternatives; module wins, as VS Code does.
   if (config.module) args.push("-m", config.module);
   else if (config.program) args.push(config.program);
@@ -232,14 +243,22 @@ export class DebugSession {
       return { ok: false, error: init.message ?? "initialize failed" };
     }
 
-    const launch = await client.request("attach", {
+    /*
+     * `attach` is deliberately NOT awaited here.
+     *
+     * Observed against debugpy 1.8.21, not assumed: it answers `attach` only
+     * *after* `configurationDone`, so awaiting the response before sending the
+     * rest of the configuration deadlocks -- the client waits for a reply that
+     * cannot arrive until the client sends more. The first version of this did
+     * exactly that and failed with "attach timed out".
+     *
+     * The fake adapter in the tests replied immediately, which is precisely
+     * why this had to be checked against the real thing.
+     */
+    const attached = client.request("attach", {
       justMyCode: config.justMyCode ?? true,
       connect: { host: "127.0.0.1", port },
     });
-    if (!launch.success) {
-      await this.stop();
-      return { ok: false, error: launch.message ?? "attach failed" };
-    }
 
     // Breakpoints are only accepted between `initialized` and
     // `configurationDone`; sending them earlier drops them silently.
@@ -253,6 +272,14 @@ export class DebugSession {
 
     // Without this the program stays paused at startup, which looks like a hang.
     await client.request("configurationDone");
+
+    // Now `attach` can complete: see the comment above.
+    const launch = await attached;
+    if (!launch.success) {
+      await this.stop();
+      return { ok: false, error: launch.message ?? "attach failed" };
+    }
+
     this.setStatus({ state: "running" });
     return { ok: true };
   }
