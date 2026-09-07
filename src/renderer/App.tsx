@@ -14,6 +14,7 @@ import { EditorPane } from "./panes/Editor.js";
 import { AgentsPane } from "./panes/Agents.js";
 import { ConfigPane } from "./panes/Config.js";
 import { SearchPane } from "./panes/Search.js";
+import { BrowserPane } from "./panes/Browser.js";
 import { DiffView, type DiffRequest } from "./panes/DiffView.js";
 import { ModelPicker, type Provider } from "./ui/ModelPicker.js";
 import { AgentsWidget, TokensWidget, useSnapshot } from "./ui/widgets.js";
@@ -28,7 +29,7 @@ import {
   split, type Dir, type Node, type Pins,
 } from "../shared/layout.js";
 
-type PaneKind = "shell" | "claude" | "git" | "editor" | "agents" | "config" | "search";
+type PaneKind = "shell" | "claude" | "git" | "editor" | "agents" | "config" | "search" | "browser";
 
 interface PaneSpec {
   id: string;
@@ -286,6 +287,7 @@ export function App() {
       else if (e.key === "r") { e.preventDefault(); doSplit("row", "agents"); }
       else if (e.key === "m") { e.preventDefault(); setPickerOpen(true); }
       else if (e.key === "k") { e.preventDefault(); doSplit("row", "config"); }
+      else if (e.key === "b") { e.preventDefault(); doSplit("row", "browser"); }
       else if (e.key === "f" && e.shiftKey) { e.preventDefault(); doSplit("row", "search"); }
       else if (e.key === "o" || e.key === "O") { e.preventDefault(); openPaletteRef.current(); }
       else if (e.key === "p" && e.shiftKey) { e.preventDefault(); togglePin(activeTabId); }
@@ -520,6 +522,7 @@ export function App() {
       cmd("cmd:git", "New git pane", "⌘G", () => doSplit("row", "git")),
       cmd("cmd:agents", "New agents pane", "⌘R", () => doSplit("row", "agents")),
       cmd("cmd:search", "Search the codebase", "⌘⇧F", () => doSplit("row", "search")),
+      cmd("cmd:browser", "New browser pane", "⌘B", () => doSplit("row", "browser")),
       cmd("cmd:config", "Open config", "⌘K", () => doSplit("row", "config")),
       cmd("cmd:model", "Switch model", "⌘M", () => setPickerOpen(true)),
       cmd("cmd:split", "Split right", "⌘D", () => doSplit("row")),
@@ -626,6 +629,7 @@ export function App() {
         <ToolButton label="Agents" hint="⌘R" icon="◉" onClick={() => doSplit("row", "agents")} />
         <ToolButton label="Model" hint="⌘M" icon="◈" onClick={() => setPickerOpen(true)} />
         <ToolButton label="Search" hint="⌘⇧F" icon="⌕" onClick={() => doSplit("row", "search")} />
+        <ToolButton label="Browser" hint="⌘B" icon="◍" onClick={() => doSplit("row", "browser")} />
         <ToolButton label="Config" hint="⌘K" icon="⚙" onClick={() => doSplit("row", "config")} />
         <ToolButton
           label={THEMES.find((t) => t.id === themeId)?.label ?? "Theme"}
@@ -782,6 +786,11 @@ export function App() {
                       <ConfigPane cwd={spec.cwd ?? cwdOf(active)} onOpen={openInPane} />
                     ) : spec.kind === "search" ? (
                       <SearchPane cwd={spec.cwd ?? cwdOf(active)} onOpen={openInPane} />
+                    ) : spec.kind === "browser" ? (
+                      // `visible` is what hides the native view: a popped-out
+                      // pane leaves a placeholder here, and the page must not
+                      // keep painting over it.
+                      <BrowserPane paneId={paneId} visible={!popped.has(paneId)} />
                     ) : (
                       <TerminalPane
                         paneId={paneId}

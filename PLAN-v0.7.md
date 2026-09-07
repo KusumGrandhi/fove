@@ -309,7 +309,10 @@ in it.
    listing every worktree with branch, dirty count, ahead/behind and live agent
    count, plus every toolbar command. Switches to an already-open worktree
    rather than opening it twice.
-6. **Browser pane** (§3) — self-contained, and compounds with the AI layer.
+6. ~~**Browser pane** (§3)~~ — **done**: a `WebContentsView` with console and
+   failed-request capture, dev-server guesses, and a `getBrowserProblems` tool
+   so Claude can read a broken page without a paste. Auto-reload on save is
+   *not* in yet.
 7. **Debugger, Python only** (§2) — largest; started once the rest is stable.
 8. **Python LSP** (§6c) — after the debugger, which teaches the same
    stateful-protocol shape.

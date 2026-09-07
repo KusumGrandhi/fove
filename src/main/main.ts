@@ -36,6 +36,7 @@ import { readFileSync } from "node:fs";
 import { PtyService } from "./pty.js";
 import { GitService } from "./git.js";
 import { WorktreeService } from "./worktrees.js";
+import { BrowserService, type Bounds } from "./browser.js";
 import { FileService } from "./files.js";
 import { ClaudeSessionService, toWire } from "./claudeSession.js";
 import { TeamService } from "./teams.js";
@@ -131,6 +132,7 @@ app.on("before-quit", () => {
   ptys.killAll();
   watcher.closeAll();
   popouts.closeAll();
+  browsers.closeAll();
   searcher.cancelAll();
   // Remove the lock file, so Claude is never offered a dead IDE.
   void ide.stop();
@@ -280,6 +282,34 @@ ipcMain.on(CH.searchStart, (_e, id: string, q: Parameters<SearchService["start"]
 ipcMain.on(CH.searchCancel, (_e, id: string) => searcher.cancel(id));
 ipcMain.handle(CH.lintCheck, (_e, path: string, cwd?: string) => linter.check(path, cwd));
 
+// ---- browser panes --------------------------------------------------------
+/**
+ * The view is a native child of the window, so it needs the window itself
+ * rather than a webContents -- and it must be looked up lazily, since panes
+ * outlive any single window reference.
+ */
+const browsers = new BrowserService(
+  () => win,
+  (paneId, state) => send(CH.browserState, paneId, state),
+);
+
+ipcMain.handle(CH.browserNavigate, (_e, paneId: string, url: string) =>
+  browsers.navigate(paneId, url),
+);
+ipcMain.on(CH.browserBounds, (_e, paneId: string, bounds: Bounds | null) =>
+  browsers.setBounds(paneId, bounds),
+);
+ipcMain.on(CH.browserBack, (_e, paneId: string) => browsers.back(paneId));
+ipcMain.on(CH.browserForward, (_e, paneId: string) => browsers.forward(paneId));
+ipcMain.on(CH.browserReload, (_e, paneId: string, hard?: boolean) =>
+  browsers.reload(paneId, hard),
+);
+ipcMain.on(CH.browserDevTools, (_e, paneId: string) => browsers.openDevTools(paneId));
+ipcMain.handle(CH.browserConsole, (_e, paneId: string) => browsers.console(paneId));
+ipcMain.handle(CH.browserNetwork, (_e, paneId: string) => browsers.network(paneId));
+ipcMain.on(CH.browserClear, (_e, paneId: string) => browsers.clear(paneId));
+ipcMain.on(CH.browserClose, (_e, paneId: string) => browsers.close(paneId));
+
 // ---- popped-out panes -----------------------------------------------------
 const popouts = new PopoutService((paneId) => send(CH.popoutClosed, paneId));
 
@@ -343,6 +373,7 @@ let ideSelection: import("./ide.js").Selection | null = null;
 const pendingDiffs = new Map<string, (v: "saved" | "rejected") => void>();
 
 const ide = new IdeService({
+  browserProblems: () => browsers.problems(),
   openFile: (req) => { send(CH.ideOpenFile, req); },
   openDiff: async (req) => {
     const verdict = await new Promise<"saved" | "rejected">((resolve) => {

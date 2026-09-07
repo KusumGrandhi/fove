@@ -95,6 +95,13 @@ async function client(tok: string, headerName = "x-claude-code-ide-authorization
            headers: () => rawHeaders, close: () => sock.destroy() };
 }
 
+/** Swapped per test, so the browser tool can be driven without a real pane. */
+let browserPanes: {
+  paneId: string; url: string;
+  console: { level: string; text: string; source?: string; line?: number }[];
+  network: { url: string; method: string; status?: number; error?: string }[];
+}[] = [];
+
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "fove-ide-"));
   process.env.CLAUDE_CONFIG_DIR = dir;
@@ -119,6 +126,7 @@ beforeAll(async () => {
     isDirty: async () => true,
     save: async () => true,
     workspaceFolders: () => ["/w"],
+    browserProblems: () => browserPanes,
   });
   port = (await ide.start())!;
   const files = await readdir(join(dir, "ide"));
@@ -229,6 +237,34 @@ describe("JSON-RPC", () => {
     for (const n of ["openFile", "openDiff", "getCurrentSelection", "getOpenEditors", "getWorkspaceFolders"]) {
       expect(names).toContain(n);
     }
+    c.close();
+  });
+
+  test("getBrowserProblems says so plainly when no pane is open", async () => {
+    const c = await client(token);
+    browserPanes = [];
+    const r = await c.call("tools/call", { name: "getBrowserProblems", arguments: {} }, 40) as
+      { result: { content: { text: string }[] } };
+    // An empty list would read as "the page is fine" when it means "no page".
+    expect(r.result.content[0]!.text).toContain("No browser pane");
+    c.close();
+  });
+
+  test("getBrowserProblems returns console errors and failed requests", async () => {
+    const c = await client(token);
+    browserPanes = [{
+      paneId: "p1",
+      url: "http://localhost:5000/",
+      console: [{ level: "error", text: "TypeError: x is not a function", source: "app.js", line: 12 }],
+      network: [{ url: "http://localhost:5000/api/z", method: "GET", status: 500 }],
+    }];
+    const r = await c.call("tools/call", { name: "getBrowserProblems", arguments: {} }, 41) as
+      { result: { content: { text: string }[] } };
+    const parsed = JSON.parse(r.result.content[0]!.text) as { panes: typeof browserPanes };
+    expect(parsed.panes[0]!.url).toBe("http://localhost:5000/");
+    expect(parsed.panes[0]!.console[0]!.text).toContain("TypeError");
+    expect(parsed.panes[0]!.network[0]!.status).toBe(500);
+    browserPanes = [];
     c.close();
   });
 

@@ -56,6 +56,19 @@ export interface IdeHooks {
   isDirty(filePath: string): Promise<boolean>;
   save(filePath: string): Promise<boolean>;
   workspaceFolders(): string[];
+  /**
+   * Errors and failed requests from the browser panes.
+   *
+   * fove-specific rather than part of the VS Code surface: it is what lets
+   * "why is this page broken" be answered from the page fove is already
+   * showing, instead of by pasting a console into the prompt.
+   */
+  browserProblems(): {
+    paneId: string;
+    url: string;
+    console: { level: string; text: string; source?: string; line?: number }[];
+    network: { url: string; method: string; status?: number; error?: string }[];
+  }[];
 }
 
 export interface Selection {
@@ -116,6 +129,13 @@ const TOOLS = [
   { name: "getCurrentSelection", description: "Get the current selection", inputSchema: { type: "object", properties: {} } },
   { name: "getLatestSelection", description: "Get the most recent selection", inputSchema: { type: "object", properties: {} } },
   { name: "checkDocumentDirty", description: "Check if a document has unsaved changes", inputSchema: { type: "object", properties: { filePath: { type: "string" } }, required: ["filePath"], additionalProperties: false } },
+  {
+    name: "getBrowserProblems",
+    description:
+      "Get console errors and failed network requests from fove's browser panes. " +
+      "Use this to diagnose a page the user is testing without asking them to paste output.",
+    inputSchema: { type: "object", properties: {} },
+  },
   { name: "saveDocument", description: "Save a document", inputSchema: { type: "object", properties: { filePath: { type: "string" } }, required: ["filePath"], additionalProperties: false } },
 ] as const;
 
@@ -325,6 +345,13 @@ export class IdeService {
       case "checkDocumentDirty": {
         const dirty = await this.hooks.isDirty(String(a.filePath ?? ""));
         return text(JSON.stringify({ isDirty: dirty }));
+      }
+      case "getBrowserProblems": {
+        const panes = this.hooks.browserProblems();
+        // Say so plainly rather than returning an empty list, which reads as
+        // "the page is fine" when it means "there is no page".
+        if (panes.length === 0) return text("No browser pane is open in fove.");
+        return text(JSON.stringify({ panes }));
       }
       case "saveDocument": {
         const ok = await this.hooks.save(String(a.filePath ?? ""));

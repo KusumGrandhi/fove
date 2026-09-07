@@ -53,6 +53,17 @@ const CH = {
   fsChanged: "fs:changed",
   wsRecipe: "ws:recipe",
   wsSaveRecipe: "ws:save-recipe",
+  browserNavigate: "browser:navigate",
+  browserBounds: "browser:bounds",
+  browserBack: "browser:back",
+  browserForward: "browser:forward",
+  browserReload: "browser:reload",
+  browserDevTools: "browser:devtools",
+  browserConsole: "browser:console",
+  browserNetwork: "browser:network",
+  browserClear: "browser:clear",
+  browserClose: "browser:close",
+  browserState: "browser:state",
   wtList: "wt:list",
   wsCreate: "ws:create-worktree",
   wsApply: "ws:apply-recipe",
@@ -156,6 +167,26 @@ const api = {
   wsRecipe: (repoRoot: string): Promise<unknown> => ipcRenderer.invoke(CH.wsRecipe, repoRoot),
   wsSaveRecipe: (repoRoot: string, recipe: unknown): Promise<unknown> =>
     ipcRenderer.invoke(CH.wsSaveRecipe, repoRoot, recipe),
+  browserNavigate: (paneId: string, url: string): Promise<string | null> =>
+    ipcRenderer.invoke(CH.browserNavigate, paneId, url),
+  browserBounds: (paneId: string, bounds: unknown): void =>
+    ipcRenderer.send(CH.browserBounds, paneId, bounds),
+  browserBack: (paneId: string): void => ipcRenderer.send(CH.browserBack, paneId),
+  browserForward: (paneId: string): void => ipcRenderer.send(CH.browserForward, paneId),
+  browserReload: (paneId: string, hard?: boolean): void =>
+    ipcRenderer.send(CH.browserReload, paneId, hard),
+  browserDevTools: (paneId: string): void => ipcRenderer.send(CH.browserDevTools, paneId),
+  browserConsole: (paneId: string): Promise<unknown[]> =>
+    ipcRenderer.invoke(CH.browserConsole, paneId),
+  browserNetwork: (paneId: string): Promise<unknown[]> =>
+    ipcRenderer.invoke(CH.browserNetwork, paneId),
+  browserClear: (paneId: string): void => ipcRenderer.send(CH.browserClear, paneId),
+  browserClose: (paneId: string): void => ipcRenderer.send(CH.browserClose, paneId),
+  onBrowserState: (fn: (paneId: string, state: unknown) => void): (() => void) => {
+    const h = (_e: unknown, paneId: string, state: unknown): void => fn(paneId, state);
+    ipcRenderer.on(CH.browserState, h);
+    return () => { ipcRenderer.off(CH.browserState, h); };
+  },
   wtList: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.wtList, cwd),
   wsCreate: (opts: unknown): Promise<unknown> => ipcRenderer.invoke(CH.wsCreate, opts),
   wsApply: (worktree: string, primary: string): Promise<unknown> =>
