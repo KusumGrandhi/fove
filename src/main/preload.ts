@@ -64,6 +64,22 @@ const CH = {
   browserClear: "browser:clear",
   browserClose: "browser:close",
   browserState: "browser:state",
+  dbgConfigs: "dbg:configs",
+  dbgStart: "dbg:start",
+  dbgStop: "dbg:stop",
+  dbgBreakpoints: "dbg:breakpoints",
+  dbgContinue: "dbg:continue",
+  dbgStepOver: "dbg:step-over",
+  dbgStepIn: "dbg:step-in",
+  dbgStepOut: "dbg:step-out",
+  dbgPause: "dbg:pause",
+  dbgStack: "dbg:stack",
+  dbgScopes: "dbg:scopes",
+  dbgVariables: "dbg:variables",
+  dbgEvaluate: "dbg:evaluate",
+  dbgInterpreters: "dbg:interpreters",
+  dbgStatus: "dbg:status",
+  dbgOutput: "dbg:output",
   wtList: "wt:list",
   wsCreate: "ws:create-worktree",
   wsApply: "ws:apply-recipe",
@@ -186,6 +202,33 @@ const api = {
     const h = (_e: unknown, paneId: string, state: unknown): void => fn(paneId, state);
     ipcRenderer.on(CH.browserState, h);
     return () => { ipcRenderer.off(CH.browserState, h); };
+  },
+  dbgConfigs: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.dbgConfigs, cwd),
+  dbgInterpreters: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.dbgInterpreters, cwd),
+  dbgStart: (opts: unknown): Promise<unknown> => ipcRenderer.invoke(CH.dbgStart, opts),
+  dbgStop: (): Promise<void> => ipcRenderer.invoke(CH.dbgStop),
+  dbgBreakpoints: (path: string, lines: number[]): Promise<void> =>
+    ipcRenderer.invoke(CH.dbgBreakpoints, path, lines),
+  dbgContinue: (): void => ipcRenderer.send(CH.dbgContinue),
+  dbgStepOver: (): void => ipcRenderer.send(CH.dbgStepOver),
+  dbgStepIn: (): void => ipcRenderer.send(CH.dbgStepIn),
+  dbgStepOut: (): void => ipcRenderer.send(CH.dbgStepOut),
+  dbgPause: (): void => ipcRenderer.send(CH.dbgPause),
+  dbgStack: (): Promise<unknown[]> => ipcRenderer.invoke(CH.dbgStack),
+  dbgScopes: (frameId: number): Promise<unknown[]> => ipcRenderer.invoke(CH.dbgScopes, frameId),
+  dbgVariables: (reference: number): Promise<unknown[]> =>
+    ipcRenderer.invoke(CH.dbgVariables, reference),
+  dbgEvaluate: (expression: string, frameId?: number): Promise<unknown> =>
+    ipcRenderer.invoke(CH.dbgEvaluate, expression, frameId),
+  onDbgStatus: (fn: (status: unknown) => void): (() => void) => {
+    const h = (_e: unknown, status: unknown): void => fn(status);
+    ipcRenderer.on(CH.dbgStatus, h);
+    return () => { ipcRenderer.off(CH.dbgStatus, h); };
+  },
+  onDbgOutput: (fn: (text: string, category: string) => void): (() => void) => {
+    const h = (_e: unknown, text: string, category: string): void => fn(text, category);
+    ipcRenderer.on(CH.dbgOutput, h);
+    return () => { ipcRenderer.off(CH.dbgOutput, h); };
   },
   wtList: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.wtList, cwd),
   wsCreate: (opts: unknown): Promise<unknown> => ipcRenderer.invoke(CH.wsCreate, opts),

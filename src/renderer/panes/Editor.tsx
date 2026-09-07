@@ -148,6 +148,28 @@ export function ensureTheme(): void {
       "editorLineNumber.activeForeground": "#8a8a93",
     },
   });
+
+  /**
+   * Breakpoint and paused-line styling.
+   *
+   * Injected rather than put in a stylesheet because Monaco addresses
+   * decorations by class name only -- there is no inline-style path for a
+   * glyph -- and this keeps the class and its appearance in one place.
+   */
+  const style = document.createElement("style");
+  style.textContent = `
+    /*
+     * Monaco absolutely positions each glyph and sets its width and height
+     * inline. Overriding those with !important collapsed every glyph but one
+     * into the same place, so the dot is drawn with a background instead --
+     * the element keeps the box Monaco gave it.
+     */
+    .fove-breakpoint {
+      background: radial-gradient(circle at 50% 50%, #e5534b 0 4.5px, transparent 4.5px);
+    }
+    .fove-paused-line { background: rgba(210, 153, 34, 0.18); }
+  `;
+  document.head.appendChild(style);
   themeReady = true;
 }
 
@@ -167,9 +189,25 @@ export function EditorPane(props: {
   initialLine?: number;
   /** Changes per request, so opening the same path twice still acts. */
   openNonce?: number;
+  /** Breakpoints to draw in the gutter, owned by the app so the debugger shares them. */
+  breakpoints?: { path: string; line: number }[];
+  onToggleBreakpoint?: (path: string, line: number) => void;
+  /** Where execution is currently paused, highlighted like a breakpoint's target. */
+  pausedAt?: { path: string; line: number } | null;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  /**
+   * The toggle handler, via a ref.
+   *
+   * Monaco's listener is attached once on mount, so capturing the prop directly
+   * would freeze the first render's copy -- the same shape the search debounce
+   * and the palette opener both needed.
+   */
+  const onToggleBreakpointRef = useRef<(path: string, line: number) => void>(() => {});
+  onToggleBreakpointRef.current = props.onToggleBreakpoint ?? (() => {});
+  /** Monaco's handle for the breakpoint decorations, so they can be replaced. */
+  const bpDecorationsRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
   /** One Monaco model per file, so undo history survives tab switches. */
   const modelsRef = useRef<Map<string, monaco.editor.ITextModel>>(new Map());
 
@@ -438,6 +476,8 @@ export function EditorPane(props: {
       renderWhitespace: "selection",
       tabSize: 2,
       padding: { top: 8 },
+      // Required for breakpoints: without it there is no gutter to click.
+      glyphMargin: true,
     });
     editorRef.current = ed;
 
@@ -469,9 +509,25 @@ export function EditorPane(props: {
         });
       }, 150);
     };
+    /**
+     * Toggle a breakpoint by clicking the glyph margin.
+     *
+     * Monaco reports the target type, so this fires only on the narrow gutter
+     * strip -- clicking the line number or the code itself must not set one.
+     */
+    const onGutter = ed.onMouseDown((e) => {
+      if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
+      const line = e.target.position?.lineNumber;
+      const model = ed.getModel();
+      const path = model ? pathOfModel(modelsRef.current, model) : null;
+      if (!line || !path) return;
+      onToggleBreakpointRef.current(path, line);
+    });
+
     const subs = [
       ed.onDidChangeCursorSelection(reportSelection),
       ed.onDidFocusEditorText(reportSelection),
+      onGutter,
     ];
 
     return () => {
@@ -483,6 +539,41 @@ export function EditorPane(props: {
       editorRef.current = null;
     };
   }, []);
+
+  /**
+   * Draw breakpoints and the paused line for whichever file is showing.
+   *
+   * A decorations *collection* rather than `deltaDecorations`: it owns its own
+   * ids, so replacing the set cannot leave an orphan marker behind when the
+   * user switches files with a breakpoint set in each.
+   */
+  useEffect(() => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    if (!bpDecorationsRef.current) bpDecorationsRef.current = ed.createDecorationsCollection();
+
+    const decorations: monaco.editor.IModelDeltaDecoration[] = [];
+    for (const bp of props.breakpoints ?? []) {
+      if (bp.path !== activePath) continue;
+      decorations.push({
+        range: new monaco.Range(bp.line, 1, bp.line, 1),
+        options: {
+          isWholeLine: false,
+          glyphMarginClassName: "fove-breakpoint",
+          glyphMarginHoverMessage: { value: "Breakpoint" },
+          // Survives edits above it, so a breakpoint tracks its line.
+          stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+        },
+      });
+    }
+    if (props.pausedAt && props.pausedAt.path === activePath) {
+      decorations.push({
+        range: new monaco.Range(props.pausedAt.line, 1, props.pausedAt.line, 1),
+        options: { isWholeLine: true, className: "fove-paused-line" },
+      });
+    }
+    bpDecorationsRef.current.set(decorations);
+  }, [props.breakpoints, props.pausedAt, activePath]);
 
   // Swap the model when the active tab changes.
   useEffect(() => {

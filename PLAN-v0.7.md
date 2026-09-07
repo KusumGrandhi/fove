@@ -313,7 +313,12 @@ in it.
    failed-request capture, dev-server guesses, and a `getBrowserProblems` tool
    so Claude can read a broken page without a paste. Auto-reload on save is
    *not* in yet.
-7. **Debugger, Python only** (§2) — largest; started once the rest is stable.
+7. ~~**Debugger, Python only** (§2)~~ — **done, with one caveat**: DAP client,
+   launch.json (JSONC) parsing, conda interpreter discovery, breakpoints in the
+   Monaco gutter, stepping, stack, variables and a watch box.
+   **Not verified end-to-end: `debugpy` is not installed**, so no real
+   breakpoint has been observed stopping a real Flask request. Everything below
+   the socket is tested against a fake adapter.
 8. **Python LSP** (§6c) — after the debugger, which teaches the same
    stateful-protocol shape.
 

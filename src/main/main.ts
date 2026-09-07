@@ -33,10 +33,14 @@ if (process.env.ELECTRON_RUN_AS_NODE) {
 import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { PtyService } from "./pty.js";
 import { GitService } from "./git.js";
 import { WorktreeService } from "./worktrees.js";
 import { BrowserService, type Bounds } from "./browser.js";
+import { DebugSession } from "./debug.js";
+import { findInterpreters } from "./interpreters.js";
+import { parseLaunchConfigs, pythonConfigs } from "../shared/launch-config.js";
 import { FileService } from "./files.js";
 import { ClaudeSessionService, toWire } from "./claudeSession.js";
 import { TeamService } from "./teams.js";
@@ -133,6 +137,7 @@ app.on("before-quit", () => {
   watcher.closeAll();
   popouts.closeAll();
   browsers.closeAll();
+  void debugSession.stop();
   searcher.cancelAll();
   // Remove the lock file, so Claude is never offered a dead IDE.
   void ide.stop();
@@ -309,6 +314,46 @@ ipcMain.handle(CH.browserConsole, (_e, paneId: string) => browsers.console(paneI
 ipcMain.handle(CH.browserNetwork, (_e, paneId: string) => browsers.network(paneId));
 ipcMain.on(CH.browserClear, (_e, paneId: string) => browsers.clear(paneId));
 ipcMain.on(CH.browserClose, (_e, paneId: string) => browsers.close(paneId));
+
+// ---- debugger -------------------------------------------------------------
+/**
+ * One session at a time. Multi-target debugging is explicitly out of scope
+ * this round; a second session would need a target id threaded through every
+ * channel below for a case that does not arise in a Flask app.
+ */
+const debugSession = new DebugSession(
+  (status) => send(CH.dbgStatus, status),
+  (text, category) => send(CH.dbgOutput, text, category),
+);
+
+ipcMain.handle(CH.dbgConfigs, async (_e, cwd: string) => {
+  try {
+    const text = await readFile(join(cwd, ".vscode", "launch.json"), "utf8");
+    return pythonConfigs(parseLaunchConfigs(text));
+  } catch {
+    // No launch.json is the normal case for most projects, not an error.
+    return [];
+  }
+});
+ipcMain.handle(CH.dbgInterpreters, (_e, cwd: string) => findInterpreters(cwd));
+ipcMain.handle(CH.dbgStart, (_e, opts: Parameters<typeof debugSession.start>[0]) =>
+  debugSession.start(opts),
+);
+ipcMain.handle(CH.dbgStop, () => debugSession.stop());
+ipcMain.handle(CH.dbgBreakpoints, (_e, path: string, lines: number[]) =>
+  debugSession.setBreakpoints(path, lines),
+);
+ipcMain.on(CH.dbgContinue, () => void debugSession.continue_());
+ipcMain.on(CH.dbgStepOver, () => void debugSession.stepOver());
+ipcMain.on(CH.dbgStepIn, () => void debugSession.stepIn());
+ipcMain.on(CH.dbgStepOut, () => void debugSession.stepOut());
+ipcMain.on(CH.dbgPause, () => void debugSession.pause());
+ipcMain.handle(CH.dbgStack, () => debugSession.stackTrace());
+ipcMain.handle(CH.dbgScopes, (_e, frameId: number) => debugSession.scopes(frameId));
+ipcMain.handle(CH.dbgVariables, (_e, reference: number) => debugSession.variables(reference));
+ipcMain.handle(CH.dbgEvaluate, (_e, expression: string, frameId?: number) =>
+  debugSession.evaluate(expression, frameId),
+);
 
 // ---- popped-out panes -----------------------------------------------------
 const popouts = new PopoutService((paneId) => send(CH.popoutClosed, paneId));

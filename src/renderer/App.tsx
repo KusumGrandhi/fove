@@ -15,6 +15,7 @@ import { AgentsPane } from "./panes/Agents.js";
 import { ConfigPane } from "./panes/Config.js";
 import { SearchPane } from "./panes/Search.js";
 import { BrowserPane } from "./panes/Browser.js";
+import { DebuggerPane } from "./panes/Debugger.js";
 import { DiffView, type DiffRequest } from "./panes/DiffView.js";
 import { ModelPicker, type Provider } from "./ui/ModelPicker.js";
 import { AgentsWidget, TokensWidget, useSnapshot } from "./ui/widgets.js";
@@ -29,7 +30,7 @@ import {
   split, type Dir, type Node, type Pins,
 } from "../shared/layout.js";
 
-type PaneKind = "shell" | "claude" | "git" | "editor" | "agents" | "config" | "search" | "browser";
+type PaneKind = "shell" | "claude" | "git" | "editor" | "agents" | "config" | "search" | "browser" | "debug";
 
 interface PaneSpec {
   id: string;
@@ -428,6 +429,9 @@ export function App() {
    * would shred the layout during a busy turn -- otherwise split one off the
    * focused pane.
    */
+  /** See openPaletteRef: an effect above needs this before it is declared. */
+  const openInPaneRef = useRef<(file: string, line?: number) => void>(() => {});
+
   const openInPane = useCallback(
     (file: string, line?: number) => {
       if (!file || !active) return;
@@ -455,6 +459,7 @@ export function App() {
     },
     [active, updateTab],
   );
+  openInPaneRef.current = openInPane;
 
   useEffect(() => {
     const off = window.th.onIdeOpenFile((raw) => {
@@ -523,6 +528,7 @@ export function App() {
       cmd("cmd:agents", "New agents pane", "⌘R", () => doSplit("row", "agents")),
       cmd("cmd:search", "Search the codebase", "⌘⇧F", () => doSplit("row", "search")),
       cmd("cmd:browser", "New browser pane", "⌘B", () => doSplit("row", "browser")),
+      cmd("cmd:debug", "New debugger pane", "", () => doSplit("row", "debug")),
       cmd("cmd:config", "Open config", "⌘K", () => doSplit("row", "config")),
       cmd("cmd:model", "Switch model", "⌘M", () => setPickerOpen(true)),
       cmd("cmd:split", "Split right", "⌘D", () => doSplit("row")),
@@ -549,6 +555,43 @@ export function App() {
     return items;
   }, [worktrees, tabs, activeTabId, active, addTab, doSplit, doClosePane, togglePin,
       togglePanePin, togglePopout, popped, panePins, themeId]);
+
+  /**
+   * Breakpoints, owned here rather than in either pane.
+   *
+   * The editor sets them and the debugger sends them, so neither can be the
+   * owner without the other reaching across. Held as a flat list because it is
+   * small and both consumers want it whole.
+   */
+  const [breakpoints, setBreakpoints] = useState<{ path: string; line: number }[]>([]);
+  const toggleBreakpoint = useCallback((path: string, line: number) => {
+    setBreakpoints((prev) => {
+      const without = prev.filter((b) => !(b.path === path && b.line === line));
+      const next = without.length === prev.length ? [...prev, { path, line }] : without;
+      // The debugger owns the whole set for a file, so send that file's lines.
+      void window.th.dbgBreakpoints(path, next.filter((b) => b.path === path).map((b) => b.line));
+      return next;
+    });
+  }, []);
+
+  /** Where execution is paused, so the editor can highlight the line. */
+  const [pausedAt, setPausedAt] = useState<{ path: string; line: number } | null>(null);
+  useEffect(() => {
+    const off = window.th.onDbgStatus((raw) => {
+      const s = raw as { state: string };
+      if (s.state !== "paused") { setPausedAt(null); return; }
+      // The top frame is where it stopped; ask for it and jump there.
+      void (async () => {
+        const frames = (await window.th.dbgStack()) as { path?: string; line: number }[];
+        const top = frames[0];
+        if (top?.path) {
+          setPausedAt({ path: top.path, line: top.line });
+          openInPaneRef.current(top.path, top.line);
+        }
+      })();
+    });
+    return off;
+  }, []);
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const openPalette = useCallback(() => {
@@ -630,6 +673,7 @@ export function App() {
         <ToolButton label="Model" hint="⌘M" icon="◈" onClick={() => setPickerOpen(true)} />
         <ToolButton label="Search" hint="⌘⇧F" icon="⌕" onClick={() => doSplit("row", "search")} />
         <ToolButton label="Browser" hint="⌘B" icon="◍" onClick={() => doSplit("row", "browser")} />
+        <ToolButton label="Debug" icon="◆" onClick={() => doSplit("row", "debug")} />
         <ToolButton label="Config" hint="⌘K" icon="⚙" onClick={() => doSplit("row", "config")} />
         <ToolButton
           label={THEMES.find((t) => t.id === themeId)?.label ?? "Theme"}
@@ -779,6 +823,9 @@ export function App() {
                         initialPath={spec.openPath}
                         initialLine={spec.openLine}
                         openNonce={spec.openNonce}
+                        breakpoints={breakpoints}
+                        onToggleBreakpoint={toggleBreakpoint}
+                        pausedAt={pausedAt}
                       />
                     ) : spec.kind === "agents" ? (
                       <AgentsPane cwd={spec.cwd ?? cwdOf(active)} onOpen={openInPane} />
@@ -791,6 +838,12 @@ export function App() {
                       // pane leaves a placeholder here, and the page must not
                       // keep painting over it.
                       <BrowserPane paneId={paneId} visible={!popped.has(paneId)} />
+                    ) : spec.kind === "debug" ? (
+                      <DebuggerPane
+                        cwd={spec.cwd ?? cwdOf(active)}
+                        breakpoints={breakpoints}
+                        onOpen={openInPane}
+                      />
                     ) : (
                       <TerminalPane
                         paneId={paneId}
