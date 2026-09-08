@@ -49,6 +49,7 @@ import { IdeService } from "./ide.js";
 import { GitWriteService } from "./gitWrite.js";
 import { KeelService } from "./keel.js";
 import { IntentStore } from "./intentStore.js";
+import { HandoffService } from "./handoffService.js";
 import { FileTreeService } from "./files.js";
 import { WatchService } from "./watch.js";
 import { PopoutService } from "./popout.js";
@@ -284,6 +285,23 @@ ipcMain.handle(CH.intentsSave, (_e, cwd: string, intent: unknown) =>
 ipcMain.handle(CH.intentsRun, (_e, cwd: string, command: string) =>
   intents.runMechanism(cwd, command),
 );
+
+// ---- handoff loop ----------------------------------------------------------
+const handoff = new HandoffService(intents);
+// Phases advance on their own, so the renderer is told rather than polling.
+handoff.on("changed", (cwd: string, state: unknown) => send(CH.handoffChanged, cwd, state));
+
+ipcMain.handle(CH.handoffState, (_e, cwd: string) => handoff.state(cwd));
+ipcMain.handle(CH.handoffStart, (_e, cwd: string, ticket: string, budget: number) =>
+  // Not awaited: planning takes ~50s and the renderer follows the events.
+  void handoff.start(cwd, ticket, budget),
+);
+ipcMain.handle(CH.handoffApprove, (_e, cwd: string) => void handoff.approve(cwd));
+ipcMain.handle(CH.handoffReplan, (_e, cwd: string, note: string) =>
+  void handoff.replan(cwd, note),
+);
+ipcMain.handle(CH.handoffStop, (_e, cwd: string) => handoff.stop(cwd));
+ipcMain.handle(CH.handoffReset, (_e, cwd: string) => handoff.reset(cwd));
 ipcMain.handle(CH.keelTurn, (_e, cwd: string, paneId?: string) => {
   // Same translation as claudeSnapshot: a pane id names the session to read,
   // and the pid never crosses into the renderer.

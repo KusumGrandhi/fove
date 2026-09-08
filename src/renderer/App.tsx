@@ -25,6 +25,7 @@ import { Palette, type PaletteItem } from "./ui/Palette.js";
 import { Keel, type TurnReview } from "./ui/Keel.js";
 import { KeelWorkspace, type WorklistWire, type CardWire } from "./ui/KeelWorkspace.js";
 import { KeelIntents, type IntentsWire } from "./ui/KeelIntents.js";
+import { initial as initialHandoff, type HandoffState } from "../shared/handoff.js";
 import type { WorktreeStatus } from "../main/worktrees.js";
 import { THEMES, DEFAULT_THEME, applyTheme } from "./ui/themes.js";
 import { close as closeTab, insert as insertTab, setPinned } from "../shared/tabs.js";
@@ -360,6 +361,14 @@ export function App() {
   const [intents, setIntents] = useState<IntentsWire | null>(null);
   /** Mechanism results from this session only: yesterday's pass is not a pass. */
   const [mechResults, setMechResults] = useState<Record<string, { passed: boolean; output: string }>>({});
+  /**
+   * The handoff loop, per workspace.
+   *
+   * Keyed by cwd rather than held for the active tab alone: a loop keeps
+   * running when you switch away, and coming back to a finished one is the
+   * normal case -- planning takes about a minute.
+   */
+  const [handoffs, setHandoffs] = useState<Record<string, HandoffState>>({});
   const [worklist, setWorklist] = useState<WorklistWire | null>(null);
   const [cards, setCards] = useState<Record<string, CardWire | undefined>>({});
   /** Open file cards. Capped at two, per rule 4; a third closes the oldest. */
@@ -712,6 +721,15 @@ export function App() {
   }, [worktrees, tabs, activeTabId, active, addTab, doSplit, doClosePane, togglePin,
       togglePanePin, togglePopout, popped, panePins, themeId]);
 
+  // Phases advance on their own, so the main process pushes rather than being
+  // polled -- a poll would either lag a 50s plan or hammer for nothing.
+  useEffect(() => {
+    const off = window.th.onHandoffChanged((cwd, state) => {
+      setHandoffs((prev) => ({ ...prev, [cwd]: state as HandoffState }));
+    });
+    return off;
+  }, []);
+
   /** Read the newest turn for the active workspace. */
   const loadKeel = useCallback(async () => {
     if (!active) return;
@@ -751,7 +769,20 @@ export function App() {
     setKeelView("workspace");
     void loadWorklist();
     void loadKeel();
-  }, [loadKeel, loadWorklist]);
+    /*
+     * Ask for the loop's current state rather than waiting for the next event.
+     *
+     * The subscription only delivers *changes*, so a loop that reached its gate
+     * before this window opened -- or before a reload -- would render as idle
+     * while it sat waiting on a human. Found by reloading mid-handoff.
+     */
+    if (active) {
+      void (async () => {
+        const s = (await window.th.handoffState(active.cwd)) as HandoffState;
+        setHandoffs((prev) => ({ ...prev, [active.cwd]: s }));
+      })();
+    }
+  }, [loadKeel, loadWorklist, active]);
 
   /*
    * Start watching every workspace as it becomes active.
@@ -959,6 +990,12 @@ export function App() {
           onClose={() => setKeelOpen(false)}
           onShowTurn={() => setKeelView("turn")}
           onShowIntents={() => { setKeelView("intents"); void loadIntents(); }}
+          handoff={handoffs[active.cwd] ?? initialHandoff()}
+          onStart={(ticket, budget) => void window.th.handoffStart(active.cwd, ticket, budget)}
+          onApprove={() => void window.th.handoffApprove(active.cwd)}
+          onReplan={(note) => void window.th.handoffReplan(active.cwd, note)}
+          onStopHandoff={() => void window.th.handoffStop(active.cwd)}
+          onResetHandoff={() => void window.th.handoffReset(active.cwd)}
         />
       )}
 

@@ -142,7 +142,7 @@ export function reduce(state: HandoffState, event: HandoffEvent): HandoffState {
       // execution never starts.
       if (overBudget(state, cost)) {
         return { ...state, phase: "stopped", costUSD: cost, endedAt: Date.now(),
-          stoppedReason: `budget of $${state.budgetUSD.toFixed(2)} reached while planning` };
+          stoppedReason: `usage cap of ${state.budgetUSD.toFixed(2)} reached while planning` };
       }
       return {
         ...state,
@@ -171,7 +171,7 @@ export function reduce(state: HandoffState, event: HandoffEvent): HandoffState {
       const cost = state.costUSD + event.costUSD;
       if (overBudget(state, cost)) {
         return { ...state, phase: "stopped", costUSD: cost, endedAt: Date.now(),
-          stoppedReason: `budget of $${state.budgetUSD.toFixed(2)} reached` };
+          stoppedReason: `usage cap of ${state.budgetUSD.toFixed(2)} reached` };
       }
       return {
         ...state,
@@ -241,7 +241,7 @@ export function describe(state: HandoffState): string {
       return state.planChangedAfterApproval
         ? "the plan changed — approve it again"
         : "waiting for you to approve the plan";
-    case "executing": return `executing step-by-step · $${state.costUSD.toFixed(2)}`;
+    case "executing": return `executing step-by-step · ${state.costUSD.toFixed(2)} used`;
     case "checking": return "checking its own work";
     case "ready": {
       const failed = state.checks.filter((c) => !c.passed).length;

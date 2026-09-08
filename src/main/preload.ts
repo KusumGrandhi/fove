@@ -43,6 +43,13 @@ const CH = {
   intentsLoad: "intents:load",
   intentsSave: "intents:save",
   intentsRun: "intents:run",
+  handoffState: "handoff:state",
+  handoffStart: "handoff:start",
+  handoffApprove: "handoff:approve",
+  handoffReplan: "handoff:replan",
+  handoffStop: "handoff:stop",
+  handoffReset: "handoff:reset",
+  handoffChanged: "handoff:changed",
   gitBlame: "git:blame",
   gitBranches: "git:branches",
   openInEditor: "open:editor",
@@ -322,6 +329,20 @@ const api = {
     ipcRenderer.invoke(CH.intentsSave, cwd, intent),
   intentsRun: (cwd: string, command: string): Promise<unknown> =>
     ipcRenderer.invoke(CH.intentsRun, cwd, command),
+
+  handoffState: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.handoffState, cwd),
+  handoffStart: (cwd: string, ticket: string, budgetUSD: number): Promise<unknown> =>
+    ipcRenderer.invoke(CH.handoffStart, cwd, ticket, budgetUSD),
+  handoffApprove: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.handoffApprove, cwd),
+  handoffReplan: (cwd: string, note: string): Promise<unknown> =>
+    ipcRenderer.invoke(CH.handoffReplan, cwd, note),
+  handoffStop: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.handoffStop, cwd),
+  handoffReset: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.handoffReset, cwd),
+  onHandoffChanged: (fn: (cwd: string, state: unknown) => void): (() => void) => {
+    const h = (_e: unknown, cwd: string, state: unknown): void => fn(cwd, state);
+    ipcRenderer.on(CH.handoffChanged, h);
+    return () => { ipcRenderer.off(CH.handoffChanged, h); };
+  },
   gitBlame: (cwd: string, path: string): Promise<unknown[]> =>
     ipcRenderer.invoke(CH.gitBlame, cwd, path),
   gitBranches: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.gitBranches, cwd),

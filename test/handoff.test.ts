@@ -115,22 +115,26 @@ describe("approval", () => {
   });
 });
 
-describe("budget", () => {
+describe("the usage cap", () => {
   it("stops during planning when the cap is reached", () => {
-    // A cap, not a warning: crossing it while planning means execution never
-    // starts, because the money for it is already gone.
+    /*
+     * A ceiling on how much work a runaway task may do. The CLI reports usage
+     * in dollars because that is what the tokens cost at API rates, but this
+     * machine authenticates by OAuth with no API key -- so it is subscription
+     * usage, not a charge, and the wording says so.
+     */
     const s = reduce(started(0.1), {
       type: "planned", plan: plan(), costUSD: 0.5,
     });
     expect(s.phase).toBe("stopped");
-    expect(s.stoppedReason).toContain("budget");
+    expect(s.stoppedReason).toContain("usage cap");
   });
 
-  it("still checks work that finished over budget", () => {
+  it("still checks work that finished over the cap", () => {
     /*
-     * The money is spent and the changes exist on disk. Refusing to look at
-     * them helps nobody -- the cap prevents *more* spending, it is not a
-     * reason to abandon what was already done.
+     * The usage is spent and the changes exist on disk. Refusing to look at
+     * them helps nobody -- the cap prevents *more* work, it is not a reason to
+     * abandon what was already done.
      */
     const s = reduce(approved(0.5), { type: "executed", costUSD: 10 });
     expect(s.phase).toBe("checking");
@@ -141,7 +145,7 @@ describe("budget", () => {
     expect(s.costUSD).toBeCloseTo(1.5, 2);
   });
 
-  it("treats a zero budget as no cap", () => {
+  it("treats zero as no cap", () => {
     const s = reduce(reduce(initial(), { type: "start", ticket: "t", budgetUSD: 0 }), {
       type: "planned", plan: plan(), costUSD: 99,
     });

@@ -21,6 +21,8 @@
 import { useEffect, useState } from "react";
 import { SURFACE, BORDER, INK, BRAND, STATE, FONT, TYPE, RADIUS, cleanPrompt } from "./keel-tokens.js";
 import { buildRows, attentionCount, type SortMode, type Tone, type WorklistFile } from "../../shared/worklist.js";
+import { KeelHandoff } from "./KeelHandoff.js";
+import type { HandoffState } from "../../shared/handoff.js";
 import type { ContractEntry, FileContract } from "../../main/contract.js";
 
 export interface WorklistWire { files: WorklistFile[]; total: number }
@@ -57,6 +59,12 @@ export function KeelWorkspace(props: {
   cards: Record<string, CardWire | undefined>;
   open: string[];
   agent: { task?: string; running: boolean; blocked?: string } | null;
+  handoff: HandoffState;
+  onStart: (ticket: string, budgetUSD: number) => void;
+  onApprove: () => void;
+  onReplan: (note: string) => void;
+  onStopHandoff: () => void;
+  onResetHandoff: () => void;
   onOpenFile: (path: string) => void;
   onOpenInPane: (path: string) => void;
   onClose: () => void;
@@ -86,10 +94,16 @@ export function KeelWorkspace(props: {
           <span style={S.brand}>Keel</span>
           <span style={S.repo}>{props.cwd.split("/").slice(-2).join("/")}</span>
           <span style={{ flex: 1 }} />
-          {props.agent?.running && (
+          {(props.handoff.phase === "planning" || props.handoff.phase === "executing"
+            || props.handoff.phase === "checking") && (
             <span style={S.agentPill}><span style={S.dot} />agent on task</span>
           )}
-          {props.agent?.blocked && <span style={S.blocked}>1 decision waiting on you</span>}
+          {props.handoff.phase === "awaiting-approval" && (
+            <span style={S.blocked}>a plan is waiting on you</span>
+          )}
+          {props.handoff.phase === "ready" && (
+            <span style={S.blocked}>ready to review</span>
+          )}
           <button style={S.ghost} onClick={props.onShowIntents}>intents</button>
           <button style={S.ghost} onClick={props.onShowTurn}>last turn</button>
           <button style={S.ghost} onClick={props.onClose}>close <span style={S.kbd}>esc</span></button>
@@ -185,48 +199,17 @@ export function KeelWorkspace(props: {
             )}
           </main>
 
-          {/* --- right: the agent rail --- */}
+          {/* --- right: the handoff rail --- */}
           <aside style={S.rail}>
-            <div style={{ ...TYPE.eyebrow, color: "rgba(253,253,252,.45)", marginBottom: 12 }}>
-              TASK
-            </div>
-            <div style={{ ...TYPE.body125, color: INK.i2, marginBottom: 20 }}>
-              {props.agent?.task ? cleanPrompt(props.agent.task) : "Nothing running in this workspace."}
-            </div>
-
-            {/*
-              * The handoff's rail has three blocks: task, plan, blocking
-              * decision. The plan needs the agent to publish one before it
-              * starts, which the CLI does not expose — so the block says what
-              * is missing rather than showing an invented sequence.
-              */}
-            <div style={{ ...TYPE.eyebrow, color: "rgba(253,253,252,.45)", marginBottom: 10 }}>
-              PLAN
-            </div>
-            <div style={S.railGap}>
-              No plan is published before a turn starts, so there is nothing to hold
-              it to. This is the rail's most important block and it is empty on
-              purpose rather than filled with a guess.
-            </div>
-
-            <div style={{ flex: 1 }} />
-
-            {props.agent?.blocked ? (
-              <div style={S.blockBox}>
-                <div style={{ ...TYPE.body125, fontWeight: 500, color: STATE.warn, marginBottom: 6 }}>
-                  Blocking
-                </div>
-                <div style={{ ...TYPE.body115, color: INK.i2 }}>{props.agent.blocked}</div>
-              </div>
-            ) : (
-              <div style={S.nextBox}>
-                <div style={{ ...TYPE.eyebrow, color: INK.i5, marginBottom: 6 }}>NEXT CHECKPOINT</div>
-                <div style={{ ...TYPE.body115, color: INK.i3 }}>
-                  The turn ends. Open <b style={{ color: BRAND.brandText }}>last turn</b> to
-                  see what it changed.
-                </div>
-              </div>
-            )}
+            <KeelHandoff
+              state={props.handoff}
+              onStart={props.onStart}
+              onApprove={props.onApprove}
+              onReplan={props.onReplan}
+              onStop={props.onStopHandoff}
+              onReset={props.onResetHandoff}
+              onShowTurn={props.onShowTurn}
+            />
           </aside>
         </div>
       </div>
