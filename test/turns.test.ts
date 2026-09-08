@@ -109,6 +109,13 @@ describe("promptText", () => {
     expect(promptText(userText("<system-reminder>be careful</system-reminder>", 4))).toBeNull();
   });
 
+  it("rejects a background task notification", () => {
+    // Found by looking at Keel's rendered history: it listed
+    // "<task-notification>" as a turn. Delivered as a user record, written by
+    // the harness, typed by nobody.
+    expect(promptText(userText("<task-notification>\nagent finished", 1))).toBeNull();
+  });
+
   it("keeps a prompt that only mentions a slash command", () => {
     // Prefix match, so this stays a real turn -- asking *about* /compact is a
     // question, not an invocation.

@@ -25,6 +25,32 @@ describe("compareSnapshots", () => {
     expect(set.changed[0]).toMatchObject({ path: "new.ts", kind: "added", preexisting: false });
   });
 
+  it("calls a newly-dirty tracked file modified, not added", () => {
+    /*
+     * Found by running this against a real repository. A committed, clean file
+     * edited during a turn is absent from the *before* snapshot -- it was not
+     * dirty -- so the naive reading is "added", and Keel rendered NEW against a
+     * file that had existed for months. Git's status letter is the authority.
+     */
+    const set = compareSnapshots(snap([]), snap([f("existing.ts", "M")]));
+    expect(set.changed[0]).toMatchObject({ kind: "modified", preexisting: false });
+  });
+
+  it("still calls an untracked file added", () => {
+    const set = compareSnapshots(snap([]), snap([f("brand-new.ts", "?")]));
+    expect(set.changed[0]!.kind).toBe("added");
+  });
+
+  it("keeps an untracked file labelled new even when it moves again", () => {
+    // It landed before the window and changed inside it. Rendering that as
+    // EDITED against a file git has never seen reads as a lie.
+    const set = compareSnapshots(
+      snap([f("draft.ts", "??", "h1")]),
+      snap([f("draft.ts", "??", "h2")]),
+    );
+    expect(set.changed[0]).toMatchObject({ kind: "added", preexisting: true });
+  });
+
   it("reports a file whose contents moved", () => {
     const set = compareSnapshots(
       snap([f("a.ts", "M", "h1")]),

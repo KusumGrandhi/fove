@@ -87,6 +87,12 @@ const SYNTHETIC_PREFIXES = [
   "This session is being continued from a previous conversation",
   // Injected context, when it arrives without the isMeta flag set.
   "<system-reminder>",
+  // A background task reporting in. Delivered as a user record but written by
+  // the harness, and it appeared in Keel's history as a turn nobody typed.
+  "<task-notification>",
+  // The IDE announcing a file was opened or focused, not a question.
+  "<ide-opened-file>",
+  "<ide-diagnostics>",
 ];
 
 /** The text of a user message, or null when the record is not a typed prompt. */

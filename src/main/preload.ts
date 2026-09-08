@@ -36,6 +36,8 @@ const CH = {
   gitStashList: "git:stash-list",
   gitCommits: "git:commits",
   gitCommitParents: "git:commit-parents",
+  keelTurn: "keel:turn",
+  keelBegin: "keel:begin",
   gitBlame: "git:blame",
   gitBranches: "git:branches",
   openInEditor: "open:editor",
@@ -304,6 +306,9 @@ const api = {
     ipcRenderer.invoke(CH.gitCommits, cwd, limit, all),
   gitCommitParents: (cwd: string, commit: string): Promise<number> =>
     ipcRenderer.invoke(CH.gitCommitParents, cwd, commit),
+  keelTurn: (cwd: string, paneId?: string): Promise<unknown> =>
+    ipcRenderer.invoke(CH.keelTurn, cwd, paneId),
+  keelBegin: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.keelBegin, cwd),
   gitBlame: (cwd: string, path: string): Promise<unknown[]> =>
     ipcRenderer.invoke(CH.gitBlame, cwd, path),
   gitBranches: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.gitBranches, cwd),

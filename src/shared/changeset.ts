@@ -94,9 +94,19 @@ export function compareSnapshots(before: TreeSnapshot, after: TreeSnapshot): Cha
     const prior = beforeByPath.get(file.path);
 
     if (!prior) {
+      /*
+       * Newly dirty. That is not the same as a new *file*: a tracked file that
+       * was committed and clean before the turn also appears here, and calling
+       * it "new" would render as NEW against a file that has existed for years.
+       *
+       * Git's own status letter is the authority -- "?" is untracked and "A" is
+       * added to the index; anything else is an edit to something that already
+       * existed.
+       */
+      const isNewFile = file.status.includes("?") || file.status.includes("A");
       changed.push({
         path: file.path,
-        kind: "added",
+        kind: isNewFile ? "added" : "modified",
         status: file.status,
         preexisting: false,
       });
@@ -110,9 +120,16 @@ export function compareSnapshots(before: TreeSnapshot, after: TreeSnapshot): Cha
         ? file.hash !== prior.hash
         : file.status !== prior.status;
 
+    /*
+     * An untracked file that moved is still a new file, not an edit. It landed
+     * before this window opened and was changed inside it -- rendering that as
+     * EDITED against a file git has never seen reads as a lie, even though the
+     * underlying facts are right.
+     */
+    const isUntracked = file.status.includes("?");
     const entry: FileChange = {
       path: file.path,
-      kind: moved ? "modified" : "unchanged",
+      kind: moved ? (isUntracked ? "added" : "modified") : "unchanged",
       status: file.status,
       preexisting: true,
     };

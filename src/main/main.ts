@@ -47,6 +47,7 @@ import { TeamService } from "./teams.js";
 import { backgroundSessions } from "./sessions.js";
 import { IdeService } from "./ide.js";
 import { GitWriteService } from "./gitWrite.js";
+import { KeelService } from "./keel.js";
 import { FileTreeService } from "./files.js";
 import { WatchService } from "./watch.js";
 import { PopoutService } from "./popout.js";
@@ -265,6 +266,16 @@ ipcMain.handle(CH.gitCommits, (_e, cwd: string, limit?: number, all?: boolean) =
 ipcMain.handle(CH.gitCommitParents, (_e, cwd: string, commit: string) =>
   gitSvc.parentCount(cwd, commit),
 );
+
+// ---- keel ------------------------------------------------------------------
+const keel = new KeelService(claudeSvc);
+ipcMain.handle(CH.keelBegin, (_e, cwd: string) => keel.begin(cwd));
+ipcMain.handle(CH.keelTurn, (_e, cwd: string, paneId?: string) => {
+  // Same translation as claudeSnapshot: a pane id names the session to read,
+  // and the pid never crosses into the renderer.
+  const pid = paneId ? ptys.pidOf(paneId) : undefined;
+  return keel.review(cwd, pid);
+});
 ipcMain.handle(CH.gitBlame, (_e, cwd: string, path: string) => gitw.blame(cwd, path));
 ipcMain.handle(CH.gitBranches, (_e, cwd: string) => gitw.branches(cwd));
 

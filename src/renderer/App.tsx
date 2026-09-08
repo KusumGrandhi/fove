@@ -22,6 +22,7 @@ import { AgentsWidget, TokensWidget, useSnapshot } from "./ui/widgets.js";
 import { TeammateBar, TeammateView, useTeammates } from "./ui/Teammates.js";
 import { C, Divider, LayoutMenu, ToolButton } from "./ui/Chrome.js";
 import { Palette, type PaletteItem } from "./ui/Palette.js";
+import { Keel, type TurnReview } from "./ui/Keel.js";
 import type { WorktreeStatus } from "../main/worktrees.js";
 import { THEMES, DEFAULT_THEME, applyTheme } from "./ui/themes.js";
 import { close as closeTab, insert as insertTab, setPinned } from "../shared/tabs.js";
@@ -308,6 +309,7 @@ export function App() {
    * keeps the handler out of the effect's dependency list -- the same shape the
    * search pane's debounce needed.
    */
+  const openKeelRef = useRef<() => void>(() => {});
   const openPaletteRef = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -327,6 +329,7 @@ export function App() {
       else if (e.key === "k") { e.preventDefault(); doSplit("row", "config"); }
       else if (e.key === "b") { e.preventDefault(); doSplit("row", "browser"); }
       else if (e.key === "f" && e.shiftKey) { e.preventDefault(); doSplit("row", "search"); }
+      else if (e.key === "l") { e.preventDefault(); openKeelRef.current(); }
       else if (e.key === "o" || e.key === "O") { e.preventDefault(); openPaletteRef.current(); }
       else if (e.key === "p" && e.shiftKey) { e.preventDefault(); togglePin(activeTabId); }
       else if (e.key === "p") { e.preventDefault(); if (active) togglePanePin(active.focusedPaneId); }
@@ -339,6 +342,17 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [doSplit, doClosePane, addTab, tabs, togglePin, activeTabId, active, togglePanePin]);
+
+  /**
+   * Keel: the review overlay.
+   *
+   * Held here rather than in a pane because it is an overlay over the whole
+   * workspace, and because it must survive whatever the panes are doing --
+   * opening it does not unmount anything.
+   */
+  const [keelOpen, setKeelOpen] = useState(false);
+  const [keelReview, setKeelReview] = useState<TurnReview | null>(null);
+  const [keelLoading, setKeelLoading] = useState(false);
 
   /**
    * Whether the stats rail is collapsed to a spine.
@@ -651,6 +665,7 @@ export function App() {
     }
 
     items.push(
+      cmd("cmd:keel", "What changed in the last turn", "⌘L", () => openKeelRef.current()),
       cmd("cmd:claude", "New Claude pane", "⌘↵", () => doSplit("row", "claude")),
       cmd("cmd:shell", "New shell pane", "", () => doSplit("row", "shell")),
       cmd("cmd:editor", "New editor pane", "⌘E", () => doSplit("row", "editor")),
@@ -685,6 +700,35 @@ export function App() {
     return items;
   }, [worktrees, tabs, activeTabId, active, addTab, doSplit, doClosePane, togglePin,
       togglePanePin, togglePopout, popped, panePins, themeId]);
+
+  /** Read the newest turn for the active workspace. */
+  const loadKeel = useCallback(async () => {
+    if (!active) return;
+    setKeelLoading(true);
+    try {
+      const r = (await window.th.keelTurn(active.cwd, railPaneId)) as TurnReview;
+      setKeelReview(r);
+    } finally {
+      setKeelLoading(false);
+    }
+  }, [active, railPaneId]);
+
+  const openKeel = useCallback(() => {
+    setKeelOpen(true);
+    void loadKeel();
+  }, [loadKeel]);
+
+  /*
+   * Start watching every workspace as it becomes active.
+   *
+   * A boundary only exists if a snapshot was taken before the turn began, so
+   * arming has to happen ahead of any review rather than when Keel opens --
+   * by then the turn is already over.
+   */
+  useEffect(() => {
+    if (!active?.cwd) return;
+    void window.th.keelBegin(active.cwd);
+  }, [active?.cwd]);
 
   /**
    * Breakpoints, owned here rather than in either pane.
@@ -731,6 +775,7 @@ export function App() {
     setPaletteOpen(true);
   }, [active?.cwd, loadWorktrees]);
   openPaletteRef.current = openPalette;
+  openKeelRef.current = openKeel;
 
   // Tell the main process which workspaces and editors are open, so the IDE
   // server can answer getWorkspaceFolders / getOpenEditors truthfully.
@@ -859,6 +904,22 @@ export function App() {
       )}
 
       {/* A diff Claude is blocked on. One at a time; the rest wait behind it. */}
+      {keelOpen && active && (
+        <Keel
+          review={keelReview}
+          loading={keelLoading}
+          cwd={active.cwd}
+          onClose={() => setKeelOpen(false)}
+          onRefresh={() => void loadKeel()}
+          onOpenFile={(path, line) => {
+            // Opening a file is why you close Keel: the panes are the place to
+            // read code, and the overlay was never meant to hold you.
+            setKeelOpen(false);
+            openInPaneRef.current(path, line);
+          }}
+        />
+      )}
+
       {diffs[0] && <DiffView req={diffs[0]} onVerdict={answerDiff} />}
 
       {/* --- the panes live inside this frame, beside the stats rail --- */}

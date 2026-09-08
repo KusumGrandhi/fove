@@ -41,6 +41,8 @@ export const CH = {
   gitStashList: "git:stash-list",
   gitCommits: "git:commits",
   gitCommitParents: "git:commit-parents",
+  keelTurn: "keel:turn",
+  keelBegin: "keel:begin",
   gitBlame: "git:blame",
   gitBranches: "git:branches",
   openInEditor: "open:editor",

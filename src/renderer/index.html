@@ -29,6 +29,10 @@
 
       /* Overlays -- the diff and the model picker. */
       @keyframes fove-fade-in { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes fove-pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: .35; transform: scale(.8); }
+      }
       @keyframes fove-rise {
         from { opacity: 0; transform: translateY(6px) scale(0.99); }
         to   { opacity: 1; transform: translateY(0) scale(1); }
