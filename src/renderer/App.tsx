@@ -24,6 +24,7 @@ import { C, Divider, LayoutMenu, ToolButton } from "./ui/Chrome.js";
 import { Palette, type PaletteItem } from "./ui/Palette.js";
 import { Keel, type TurnReview } from "./ui/Keel.js";
 import { KeelWorkspace, type WorklistWire, type CardWire } from "./ui/KeelWorkspace.js";
+import { KeelIntents, type IntentsWire } from "./ui/KeelIntents.js";
 import type { WorktreeStatus } from "../main/worktrees.js";
 import { THEMES, DEFAULT_THEME, applyTheme } from "./ui/themes.js";
 import { close as closeTab, insert as insertTab, setPinned } from "../shared/tabs.js";
@@ -355,7 +356,10 @@ export function App() {
   const [keelReview, setKeelReview] = useState<TurnReview | null>(null);
   const [keelLoading, setKeelLoading] = useState(false);
   /** Which Keel view is showing: the workspace, or the last turn's review. */
-  const [keelView, setKeelView] = useState<"workspace" | "turn">("workspace");
+  const [keelView, setKeelView] = useState<"workspace" | "turn" | "intents">("workspace");
+  const [intents, setIntents] = useState<IntentsWire | null>(null);
+  /** Mechanism results from this session only: yesterday's pass is not a pass. */
+  const [mechResults, setMechResults] = useState<Record<string, { passed: boolean; output: string }>>({});
   const [worklist, setWorklist] = useState<WorklistWire | null>(null);
   const [cards, setCards] = useState<Record<string, CardWire | undefined>>({});
   /** Open file cards. Capped at two, per rule 4; a third closes the oldest. */
@@ -737,6 +741,11 @@ export function App() {
     setCards((prev) => ({ ...prev, [path]: card }));
   }, [active, cards]);
 
+  const loadIntents = useCallback(async () => {
+    if (!active) return;
+    setIntents((await window.th.intentsLoad(active.cwd)) as IntentsWire);
+  }, [active]);
+
   const openKeel = useCallback(() => {
     setKeelOpen(true);
     setKeelView("workspace");
@@ -949,6 +958,33 @@ export function App() {
           }}
           onClose={() => setKeelOpen(false)}
           onShowTurn={() => setKeelView("turn")}
+          onShowIntents={() => { setKeelView("intents"); void loadIntents(); }}
+        />
+      )}
+
+      {keelOpen && active && keelView === "intents" && (
+        <KeelIntents
+          cwd={active.cwd}
+          data={intents}
+          results={mechResults}
+          onRun={async (key, command) => {
+            const r = (await window.th.intentsRun(active.cwd, command)) as
+              { passed: boolean; output: string };
+            setMechResults((prev) => ({ ...prev, [key]: r }));
+          }}
+          onAdopt={async (c) => {
+            // Adopting copies the rule into your own store. The repository's
+            // own file is never written to.
+            const id = c.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40) || "rule";
+            await window.th.intentsSave(active.cwd, {
+              id,
+              headline: c.name,
+              clauses: [{ num: "01", name: c.name, text: c.text, state: "unverifiable", source: c.from }],
+            });
+            void loadIntents();
+          }}
+          onBack={() => setKeelView("workspace")}
+          onClose={() => setKeelOpen(false)}
         />
       )}
 

@@ -48,6 +48,7 @@ import { backgroundSessions } from "./sessions.js";
 import { IdeService } from "./ide.js";
 import { GitWriteService } from "./gitWrite.js";
 import { KeelService } from "./keel.js";
+import { IntentStore } from "./intentStore.js";
 import { FileTreeService } from "./files.js";
 import { WatchService } from "./watch.js";
 import { PopoutService } from "./popout.js";
@@ -272,6 +273,17 @@ const keel = new KeelService(claudeSvc);
 ipcMain.handle(CH.keelBegin, (_e, cwd: string) => keel.begin(cwd));
 ipcMain.handle(CH.keelWorklist, (_e, cwd: string) => keel.worklist(cwd));
 ipcMain.handle(CH.keelCard, (_e, cwd: string, path: string) => keel.card(cwd, path));
+
+const intents = new IntentStore();
+ipcMain.handle(CH.intentsLoad, (_e, cwd: string) => intents.load(cwd));
+// The renderer sends plain JSON, so this is shaped rather than trusted: a
+// malformed intent should fail to save, not be written and fail to parse later.
+ipcMain.handle(CH.intentsSave, (_e, cwd: string, intent: unknown) =>
+  intents.save(cwd, intent as Parameters<IntentStore["save"]>[1]),
+);
+ipcMain.handle(CH.intentsRun, (_e, cwd: string, command: string) =>
+  intents.runMechanism(cwd, command),
+);
 ipcMain.handle(CH.keelTurn, (_e, cwd: string, paneId?: string) => {
   // Same translation as claudeSnapshot: a pane id names the session to read,
   // and the pid never crosses into the renderer.

@@ -40,6 +40,9 @@ const CH = {
   keelBegin: "keel:begin",
   keelWorklist: "keel:worklist",
   keelCard: "keel:card",
+  intentsLoad: "intents:load",
+  intentsSave: "intents:save",
+  intentsRun: "intents:run",
   gitBlame: "git:blame",
   gitBranches: "git:branches",
   openInEditor: "open:editor",
@@ -314,6 +317,11 @@ const api = {
   keelWorklist: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.keelWorklist, cwd),
   keelCard: (cwd: string, path: string): Promise<unknown> =>
     ipcRenderer.invoke(CH.keelCard, cwd, path),
+  intentsLoad: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.intentsLoad, cwd),
+  intentsSave: (cwd: string, intent: unknown): Promise<unknown> =>
+    ipcRenderer.invoke(CH.intentsSave, cwd, intent),
+  intentsRun: (cwd: string, command: string): Promise<unknown> =>
+    ipcRenderer.invoke(CH.intentsRun, cwd, command),
   gitBlame: (cwd: string, path: string): Promise<unknown[]> =>
     ipcRenderer.invoke(CH.gitBlame, cwd, path),
   gitBranches: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.gitBranches, cwd),

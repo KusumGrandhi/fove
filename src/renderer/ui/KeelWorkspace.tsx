@@ -61,6 +61,7 @@ export function KeelWorkspace(props: {
   onOpenInPane: (path: string) => void;
   onClose: () => void;
   onShowTurn: () => void;
+  onShowIntents: () => void;
 }) {
   const [sort, setSort] = useState<SortMode>("attention");
 
@@ -89,6 +90,7 @@ export function KeelWorkspace(props: {
             <span style={S.agentPill}><span style={S.dot} />agent on task</span>
           )}
           {props.agent?.blocked && <span style={S.blocked}>1 decision waiting on you</span>}
+          <button style={S.ghost} onClick={props.onShowIntents}>intents</button>
           <button style={S.ghost} onClick={props.onShowTurn}>last turn</button>
           <button style={S.ghost} onClick={props.onClose}>close <span style={S.kbd}>esc</span></button>
         </header>
@@ -328,9 +330,8 @@ function FileCard(props: {
             <div>
               <div style={S.colEyebrow}>INVARIANTS</div>
               <div style={S.noIntent}>
-                No <span style={{ fontFamily: FONT.mono }}>.intent</span> for this file, so
-                nothing is checking it. Writing one is what turns this column from empty
-                into the reason to trust a handoff.
+                No intent covers this file, so nothing is checking it. Writing one is
+                what turns this column from empty into the reason to trust a handoff.
               </div>
             </div>
           </div>
