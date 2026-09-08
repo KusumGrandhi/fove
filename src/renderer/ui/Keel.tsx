@@ -1,25 +1,34 @@
 /**
- * Keel: what the last turn changed.
+ * Keel — review and approve, built to the `2c` specification.
  *
- * An overlay, not a mode and not a replacement for the panes. It opens on ⌘L,
- * closes on Escape, and everything underneath keeps running -- no pane
- * unmounts, no PTY dies, the agent does not pause. That is the whole design
- * decision: if the summary cannot tell you enough, you close it and read the
- * code, so nothing here has to be complete enough to live in.
+ * An overlay, not a mode and not a replacement for the panes. ⌘L opens it,
+ * Escape closes it, and everything underneath keeps running: no pane unmounts,
+ * no PTY dies, the agent does not pause. If the summary cannot tell you enough
+ * you close it and read the code, which is why it does not have to be complete
+ * enough to live in.
  *
  * Layered at z-index 50, below the command palette and below Claude's blocking
  * diff (both 60), so an approval Claude is waiting on always wins.
  *
- * **It never claims authorship.** A change that appeared between two snapshots
- * was made *during* the turn, by something -- usually the agent, sometimes you,
- * a formatter, a watcher, or an agent in another pane. The vocabulary here says
- * "changed during this turn" and never "the agent did this", and the same rule
- * is pinned by a test in `changeset.test.ts`.
+ * **Structure is the handoff's, verbatim where the data allows:** 872px card,
+ * two summary boxes side by side, one row per file with a two-column was /
+ * is-now grid, then an action row. Its own typefaces and palette rather than
+ * fove's, for the same reason -- an earlier attempt substituted fove's tokens
+ * and lost the design.
+ *
+ * **Where it degrades, it says so.** The handoff's `WAS` and `IS NOW` columns
+ * hold an extracted type surface. Python at 39% return-annotation cannot give
+ * us one, so those columns hold what git knows -- the file's prior state and
+ * its current one -- and the screen labels that rather than dressing a diff in
+ * the language of contracts.
+ *
+ * **It never claims authorship.** "Changed during this turn", never "the agent
+ * did this"; a test in `changeset.test.ts` pins the same rule on the data.
  */
 
 import { useEffect, useRef, useState } from "react";
-import { C } from "./Chrome.js";
 import type { ChangeSet, ChangeKind, FileChange } from "../../shared/changeset.js";
+import { SURFACE, BORDER, INK, BRAND, STATE, FONT, TYPE, RADIUS, SHADOW } from "./keel-tokens.js";
 
 interface TurnLite {
   id: string;
@@ -39,28 +48,49 @@ export interface TurnReview {
   fromPane: boolean;
 }
 
-/** Colour by what kind of change it is, matching the risk ordering. */
+/** State colour per kind of change, matching the risk ordering. */
 const KIND_COLOR: Record<ChangeKind, string> = {
-  added: "#3fb950",
-  resolved: "#e5534b",
-  modified: "#d29922",
-  unchanged: "#5a5a63",
+  added: STATE.good,
+  resolved: STATE.bad,
+  modified: STATE.warn,
+  unchanged: INK.i5,
 };
 
-const KIND_LABEL: Record<ChangeKind, string> = {
-  added: "new",
-  resolved: "gone",
-  modified: "edited",
-  unchanged: "untouched",
+/** What each kind was, and is now — the two columns of the handoff's grid. */
+const KIND_STATES: Record<ChangeKind, { was: string; now: string }> = {
+  added: { was: "not in the working tree", now: "new, uncommitted" },
+  modified: { was: "committed, or already edited", now: "edited during this turn" },
+  resolved: { was: "uncommitted changes", now: "reverted, committed, or deleted" },
+  unchanged: { was: "uncommitted changes", now: "unchanged" },
 };
+
+/** One sentence of consequence, saffron when it is the risky one. */
+function consequence(f: FileChange): { text: string; risky: boolean } {
+  if (f.kind === "resolved") {
+    return {
+      text: "Work that was here is gone. If that was not intended, it is not in the working tree any more.",
+      risky: true,
+    };
+  }
+  if (f.kind === "added") {
+    return { text: "A file that did not exist before this turn. Nothing has reviewed it.", risky: false };
+  }
+  if (f.preexisting) {
+    return {
+      text: "Already had uncommitted changes before the turn, so what the turn did cannot be separated from what was there.",
+      risky: true,
+    };
+  }
+  return { text: "Was clean at the start of the turn, so this change belongs to it.", risky: false };
+}
 
 /**
  * Strip IDE context the editor prepends to a prompt.
  *
- * `<ide_selection>` wraps the code you had highlighted and is genuinely part of
- * the turn -- it is not synthetic, so `turns.ts` keeps it. But it is context,
- * not the question, and showing 400 characters of Python where the prompt
- * should be makes the history unreadable.
+ * `<ide_selection>` wraps the code you had highlighted. It is genuinely part of
+ * the turn, so `turns.ts` keeps it — but it is context rather than the
+ * question, and 400 characters of Python where the prompt should be makes the
+ * history unreadable.
  */
 function cleanPrompt(text: string): string {
   const stripped = text.replace(/<ide_selection>[\s\S]*?<\/ide_selection>/g, "").trim();
@@ -90,10 +120,9 @@ export function Keel(props: {
 }) {
   const { review } = props;
   const hostRef = useRef<HTMLDivElement>(null);
-  const [selected, setSelected] = useState<string | null>(null);
 
-  // Escape closes. Captured, because a pane underneath may also listen for it
-  // and the overlay is the thing in front.
+  // Escape closes. Captured, because a pane underneath may also listen and the
+  // overlay is the thing in front.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); props.onClose(); }
@@ -109,127 +138,149 @@ export function Keel(props: {
 
   return (
     <div style={S.backdrop} onMouseDown={(e) => { if (e.target === e.currentTarget) props.onClose(); }}>
-      <div style={S.panel} ref={hostRef} tabIndex={-1}>
-        <header style={S.head}>
-          <span style={S.brand}>keel</span>
-          <span style={S.cwd} title={props.cwd}>{props.cwd.split("/").pop()}</span>
-          <div style={{ flex: 1 }} />
+      <div style={S.card} ref={hostRef} tabIndex={-1}>
+
+        {/* --- top bar: what this turn was, and how big --- */}
+        <header style={S.topbar}>
+          <span style={S.claimId}>THIS TURN</span>
+          <span style={S.claimTitle}>
+            {review?.turn ? cleanPrompt(review.turn.prompt).split("\n")[0]!.slice(0, 64) : "no turn yet"}
+          </span>
+          <span style={{ flex: 1 }} />
           {review?.running && (
-            <span style={S.runningPill}>
-              <span style={S.dot} />turn in progress
-            </span>
+            <span style={S.runPill}><span style={S.dot} />running</span>
           )}
-          <button style={S.ghost} onClick={props.onRefresh} title="Re-read the session">
-            refresh
-          </button>
-          <button style={S.ghost} onClick={props.onClose}>close <span style={S.key}>esc</span></button>
+          <span style={S.count}>
+            {changed.length} file{changed.length === 1 ? "" : "s"}
+            {carried.length > 0 && ` · ${carried.length} carried`}
+          </span>
+          <button style={S.ghost} onClick={props.onRefresh}>refresh</button>
+          <button style={S.ghost} onClick={props.onClose}>close <span style={S.kbd}>esc</span></button>
         </header>
 
         {props.loading && !review ? (
           <div style={S.empty}>reading the session…</div>
         ) : !review?.turn ? (
           <div style={S.empty}>
-            <div style={{ color: C.dim, marginBottom: 6 }}>no turns in this workspace yet</div>
-            <div style={S.emptyHint}>
-              Keel opens on the last thing you asked Claude to do. Start a turn and come back.
+            <div style={{ ...TYPE.body135, color: INK.i2, marginBottom: 8 }}>
+              No turns in this workspace yet.
+            </div>
+            <div style={{ ...TYPE.body115, color: INK.i4, maxWidth: 420, margin: "0 auto" }}>
+              Keel opens on the last thing you asked Claude to do.
             </div>
           </div>
         ) : (
           <div style={S.body}>
-            {/* --- the prompt this turn answered --- */}
-            <section style={S.promptBox}>
-              <div style={S.eyebrow}>the ask</div>
-              <p style={S.prompt}>{cleanPrompt(review.turn.prompt)}</p>
-              <div style={S.metaRow}>
+
+            {/* --- the ask --- */}
+            <section>
+              <div style={S.eyebrow}>THE ASK</div>
+              <p style={S.ask}>{cleanPrompt(review.turn.prompt)}</p>
+              <div style={S.askMeta}>
                 {!review.fromPane && (
-                  // The focused pane's own session had nothing, so this came
-                  // from the workspace's newest. Say so -- it may not be the
-                  // session being looked at.
-                  <span style={S.tag} title="the focused pane has no turns of its own yet">
+                  <span style={S.chip} title="the focused pane has no turns of its own yet">
                     newest session
                   </span>
                 )}
                 <span>{rel(review.turn.startedAt)}</span>
                 <span>·</span>
                 <span>{dur(review.turn)}</span>
-                <div style={{ flex: 1 }} />
-                <span style={{ color: C.dim }}>{review.summary}</span>
               </div>
             </section>
 
-            {/* --- what it changed, or why we cannot say --- */}
+            {/* --- two summary boxes, side by side --- */}
+            <div style={S.summaryRow}>
+              <div style={S.summaryNeutral}>
+                <div style={{ ...S.eyebrow, color: INK.i5, marginBottom: 7 }}>
+                  WHAT IS KNOWN
+                </div>
+                <div style={{ ...TYPE.body125, color: INK.i2 }}>
+                  {review.changes === null
+                    ? "No boundary for this turn, so nothing can be attributed to it."
+                    : `${changed.length} file${changed.length === 1 ? "" : "s"} moved between the start of this turn and now.`}
+                </div>
+              </div>
+
+              {/*
+                * The important box. The handoff calls this "cannot be proven
+                * here" and says it isolates what only a human can decide --
+                * capped at three items, because more than three means the task
+                * was scoped too widely.
+                */}
+              <div style={S.summaryWarn}>
+                <div style={{ ...S.eyebrow, color: STATE.warn, marginBottom: 7 }}>
+                  CANNOT BE PROVEN HERE
+                </div>
+                <div style={{ ...TYPE.body125, color: INK.i2 }}>
+                  {unproven(review).slice(0, 3).map((line, i) => (
+                    <div key={i} style={{ marginBottom: 4 }}>{line}</div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* --- file by file --- */}
             {review.changes === null ? (
               <Unbounded reason={review.unbounded} />
             ) : (
               <>
-                {review.confidence && !review.confidence.reliable && (
-                  <div style={S.warn}>
-                    <b style={{ color: "#d29922" }}>attribution is weak here.</b>{" "}
-                    {review.confidence.muddied} file{review.confidence.muddied === 1 ? " was" : "s were"}{" "}
-                    already in flight before this turn started, against{" "}
-                    {review.confidence.clean} that {review.confidence.clean === 1 ? "was" : "were"} not.
-                    What this turn did cannot be separated from what was already there.
+                <div style={S.eyebrow}>
+                  FILE BY FILE — WHAT IT WAS, WHAT IT IS NOW
+                </div>
+
+                {changed.length === 0 ? (
+                  <div style={{ ...TYPE.body125, color: INK.i4 }}>Nothing moved on disk.</div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {changed.map((f) => (
+                      <FileCard
+                        key={f.path}
+                        file={f}
+                        onOpen={() => props.onOpenFile(`${props.cwd}/${f.path}`)}
+                      />
+                    ))}
                   </div>
                 )}
 
-                <section>
-                  <div style={S.eyebrow}>
-                    changed during this turn
-                    <span style={S.count}>{changed.length}</span>
-                  </div>
-                  {changed.length === 0 ? (
-                    <div style={S.none}>nothing moved on disk</div>
-                  ) : (
-                    <div style={S.list}>
-                      {changed.map((f) => (
-                        <FileRow
-                          key={f.path}
-                          file={f}
-                          open={selected === f.path}
-                          onToggle={() => setSelected((s) => (s === f.path ? null : f.path))}
-                          onOpen={() => props.onOpenFile(`${props.cwd}/${f.path}`)}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </section>
-
                 {carried.length > 0 && (
                   <section>
-                    <div style={S.eyebrow}>
-                      already dirty, unchanged by this turn
-                      <span style={S.count}>{carried.length}</span>
-                    </div>
-                    <div style={S.list}>
+                    <div style={S.eyebrow}>ALREADY DIRTY, UNTOUCHED BY THIS TURN</div>
+                    <div style={S.carriedList}>
                       {carried.map((f) => (
-                        <div key={f.path} style={{ ...S.row, opacity: 0.55 }}>
-                          <span style={{ ...S.kind, color: KIND_COLOR.unchanged }}>—</span>
-                          <span style={S.path}>{f.path}</span>
-                        </div>
+                        <span key={f.path} style={S.carriedItem}>{f.path}</span>
                       ))}
                     </div>
                   </section>
                 )}
 
-                {/* The honest line. Not "safe" -- "nothing was checking". */}
-                <div style={S.coverage}>
-                  <b style={{ color: C.fg }}>{changed.length}</b> file
-                  {changed.length === 1 ? "" : "s"} changed, and nothing checked{" "}
-                  {changed.length === 1 ? "it" : "them"} against a rule.
-                  <span style={{ color: C.faint }}> Intents land next.</span>
+                {/* --- action row --- */}
+                <div style={S.actions}>
+                  <button style={S.primary} disabled>Accept and merge</button>
+                  <button style={S.secondary} disabled>Revert everything this turn touched</button>
+                  <span style={{ flex: 1 }} />
+                  {/*
+                    * Both actions are deliberately inert: `applyPatch` exists
+                    * but is not wired, and a button that looks live and does
+                    * nothing is worse than one that says why.
+                    */}
+                  <span style={{ ...TYPE.body115, color: STATE.warn }}>
+                    not wired yet — lands with intents
+                  </span>
                 </div>
               </>
             )}
 
-            {/* --- earlier turns, for context --- */}
+            {/* --- earlier turns --- */}
             {review.history.length > 1 && (
               <section>
-                <div style={S.eyebrow}>earlier turns</div>
-                <div style={S.list}>
+                <div style={S.eyebrow}>EARLIER TURNS</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                   {review.history.slice(1, 6).map((t) => (
                     <div key={t.id} style={S.histRow} title={cleanPrompt(t.prompt)}>
                       <span style={S.histWhen}>{rel(t.startedAt)}</span>
-                      <span style={S.histPrompt}>{cleanPrompt(t.prompt).split("\n")[0]}</span>
+                      <span style={S.histText}>
+                        {cleanPrompt(t.prompt).split("\n")[0]}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -242,160 +293,205 @@ export function Keel(props: {
   );
 }
 
-/** Why there is no change set. Each reason needs a different response. */
-function Unbounded(props: { reason?: "not-watching" | "not-a-repo" | "running" }) {
-  if (props.reason === "not-a-repo") {
-    return (
-      <div style={S.warn}>
-        This workspace is not a git repository, so there is no way to tell what changed.
-      </div>
+/**
+ * What only a human can decide, for the saffron box.
+ *
+ * Every line here is something the system genuinely cannot check, stated as
+ * such. The handoff caps this at three; more than three is itself the signal
+ * that the task was too wide.
+ */
+function unproven(review: TurnReview): string[] {
+  const out: string[] = [];
+  const changed = review.changes?.changed ?? [];
+
+  if (review.changes === null) {
+    out.push("Everything. fove was not watching when this turn began.");
+    return out;
+  }
+  if (review.confidence && !review.confidence.reliable) {
+    out.push(
+      `${review.confidence.muddied} file${review.confidence.muddied === 1 ? " was" : "s were"} already in flight, so this turn's work cannot be separated from what was there.`,
     );
   }
+  if (changed.some((c) => c.kind === "resolved")) {
+    out.push("Work disappeared during this turn. Only you know whether that was intended.");
+  }
+  if (changed.length > 0) {
+    out.push(`Whether ${changed.length === 1 ? "this change is" : "these changes are"} correct — nothing checked them against a rule.`);
+  }
+  if (out.length === 0) out.push("Nothing changed, so there is nothing to judge.");
+  return out;
+}
+
+/** Why there is no change set. Each reason needs a different response. */
+function Unbounded(props: { reason?: "not-watching" | "not-a-repo" | "running" }) {
+  const text =
+    props.reason === "not-a-repo"
+      ? "This workspace is not a git repository, so there is no way to tell what changed."
+      : "fove was not watching this workspace when the turn began, so it cannot separate what the turn did from everything else uncommitted. It is watching now — the next turn will have a proper boundary.";
   return (
-    <div style={S.warn}>
-      <b style={{ color: "#d29922" }}>no boundary for this turn.</b>{" "}
-      fove was not watching this workspace when the turn began, so it cannot separate
-      what the turn did from everything else uncommitted. It is watching now —
-      the next turn will have a proper change set.
+    <div style={S.summaryWarn}>
+      <div style={{ ...S.eyebrow, color: STATE.warn, marginBottom: 7 }}>NO BOUNDARY</div>
+      <div style={{ ...TYPE.body125, color: INK.i2 }}>{text}</div>
     </div>
   );
 }
 
-function FileRow(props: {
-  file: FileChange;
-  open: boolean;
-  onToggle: () => void;
-  onOpen: () => void;
-}) {
+/**
+ * One file: name and state, the was / is-now grid, then a consequence.
+ *
+ * The handoff puts an extracted type surface in those two columns. Python at
+ * 39% annotation cannot give us one, so they carry what git knows instead --
+ * and the eyebrow says "state", not "contract", rather than implying a
+ * guarantee that is not there.
+ */
+function FileCard(props: { file: FileChange; onOpen: () => void }) {
   const { file } = props;
+  const [openDiff, setOpenDiff] = useState(false);
+  const states = KIND_STATES[file.kind];
+  const cons = consequence(file);
+
   return (
-    <div style={S.row} onClick={props.onToggle}>
-      <span style={{ ...S.kind, color: KIND_COLOR[file.kind] }}>{KIND_LABEL[file.kind]}</span>
-      <span style={S.path} title={file.path}>{file.path}</span>
-      {file.preexisting && file.kind !== "added" && (
-        // Worth saying: this file was already dirty, so the turn is only part
-        // of what is in it.
-        <span style={S.tag} title="already had uncommitted changes before this turn">
-          was dirty
-        </span>
-      )}
-      <div style={{ flex: 1 }} />
-      <button
-        style={S.openBtn}
-        onClick={(e) => { e.stopPropagation(); props.onOpen(); }}
-      >
-        open
-      </button>
+    <div style={{ ...S.fileCard, borderLeft: `2px solid ${KIND_COLOR[file.kind]}` }}>
+      <div style={S.fileHead}>
+        <span style={S.filePath}>{file.path}</span>
+        <span style={{ ...TYPE.mono105, color: INK.i5 }}>{file.status}</span>
+        <span style={{ flex: 1 }} />
+        <button
+          style={S.linkBtn}
+          onClick={() => { setOpenDiff((v) => !v); props.onOpen(); }}
+        >
+          open
+        </button>
+      </div>
+
+      <div style={S.wasIsNow}>
+        <div style={S.was}>
+          <div style={S.colLabel}>WAS</div>
+          <div style={{ ...TYPE.mono115, color: INK.i4 }}>{states.was}</div>
+        </div>
+        <div style={S.isNow}>
+          <div style={S.colLabel}>IS NOW</div>
+          <div style={{ ...TYPE.mono115, color: INK.i1 }}>{states.now}</div>
+        </div>
+      </div>
+
+      <div style={{ ...TYPE.body115, color: cons.risky ? STATE.warn : INK.i3 }}>
+        {cons.text}
+      </div>
     </div>
   );
 }
 
 const S: Record<string, React.CSSProperties> = {
   backdrop: {
-    position: "absolute", inset: 0, background: "rgba(0,0,0,0.5)",
+    position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)",
     display: "flex", alignItems: "flex-start", justifyContent: "center",
-    paddingTop: "6vh", zIndex: 50,
+    paddingTop: "5vh", zIndex: 50,
     animation: "fove-fade-in 120ms ease-out",
   },
-  panel: {
-    width: "min(920px, 92%)", maxHeight: "84vh", display: "flex", flexDirection: "column",
-    background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12,
-    boxShadow: "0 24px 64px rgba(0,0,0,0.55)", overflow: "hidden", outline: "none",
+  /** 872px, per the handoff. */
+  card: {
+    width: "min(872px, 94%)", maxHeight: "88vh", display: "flex", flexDirection: "column",
+    background: SURFACE.s0, border: `1px solid ${BORDER.b2}`, borderRadius: RADIUS.card,
+    boxShadow: SHADOW.card, overflow: "hidden", outline: "none",
     animation: "fove-rise 160ms ease-out",
   },
-  head: {
-    display: "flex", alignItems: "center", gap: 10, padding: "10px 14px",
-    background: C.chrome, borderBottom: `1px solid ${C.line}`, flexShrink: 0,
+
+  topbar: {
+    display: "flex", alignItems: "center", gap: 12, height: 44, padding: "0 16px",
+    background: SURFACE.s1, borderBottom: `1px solid ${BORDER.b2}`, flexShrink: 0,
   },
-  brand: { color: C.fg, fontSize: 13, fontWeight: 600, letterSpacing: 0.2 },
-  cwd: { color: C.faint, fontSize: 11, fontFamily: "Menlo, monospace" },
-  runningPill: {
-    display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10.5,
-    color: C.accent, border: `1px solid ${C.accent}55`, background: `${C.accent}14`,
-    borderRadius: 20, padding: "2px 9px",
+  claimId: { ...TYPE.eyebrow, color: INK.i4 },
+  claimTitle: { ...TYPE.title15, fontSize: 12.5, color: INK.i1 },
+  count: { ...TYPE.body115, color: INK.i4 },
+  runPill: {
+    display: "inline-flex", alignItems: "center", gap: 7,
+    padding: "3px 9px", borderRadius: RADIUS.pill,
+    background: BRAND.wash, border: `1px solid ${BRAND.edge}`,
+    ...TYPE.body115, color: INK.i1,
   },
   dot: {
-    width: 6, height: 6, borderRadius: "50%", background: C.accent,
+    width: 6, height: 6, borderRadius: "50%", background: BRAND.brand,
     animation: "fove-pulse 1.6s ease-in-out infinite",
   },
   ghost: {
-    padding: "3px 10px", borderRadius: 5, border: `1px solid ${C.line}`,
-    background: "transparent", color: C.dim, fontSize: 11, cursor: "pointer",
-    fontFamily: "system-ui",
+    padding: "4px 10px", borderRadius: RADIUS.chip, border: `1px solid ${BORDER.b2}`,
+    background: "transparent", color: INK.i3, ...TYPE.body115, cursor: "pointer",
   },
-  key: { opacity: 0.55, marginLeft: 5, fontSize: 10 },
+  kbd: { color: INK.i5, marginLeft: 5, fontSize: 10 },
 
-  body: { overflowY: "auto", padding: "14px 16px 18px", display: "flex", flexDirection: "column", gap: 16 },
-  empty: { padding: "44px 20px", textAlign: "center", color: C.faint, fontSize: 12 },
-  emptyHint: { fontSize: 11, color: C.faint, maxWidth: 420, margin: "0 auto", lineHeight: 1.6 },
-
-  promptBox: {
-    background: C.bg, border: `1px solid ${C.line}`, borderRadius: 9, padding: "11px 13px",
+  body: {
+    overflowY: "auto", padding: "18px 20px 20px",
+    display: "flex", flexDirection: "column", gap: 16,
   },
-  eyebrow: {
+  empty: { padding: "56px 20px", textAlign: "center" },
+
+  eyebrow: { ...TYPE.eyebrow, color: INK.i5, marginBottom: 9 },
+  ask: { ...TYPE.title17, color: INK.i1, margin: "0 0 10px", maxWidth: "62ch", textWrap: "pretty" },
+  askMeta: {
     display: "flex", alignItems: "center", gap: 8,
-    fontSize: 9.5, letterSpacing: 0.9, textTransform: "uppercase",
-    color: C.faint, marginBottom: 8,
+    ...TYPE.body115, color: INK.i4, fontVariantNumeric: "tabular-nums",
   },
-  count: {
-    fontSize: 9.5, color: C.dim, background: C.chromeHi, borderRadius: 9,
-    padding: "0 6px", letterSpacing: 0,
-  },
-  prompt: {
-    margin: "0 0 9px", fontSize: 13.5, lineHeight: 1.55, color: C.fg,
-    fontFamily: "system-ui", maxWidth: "72ch",
-    display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden",
-  },
-  metaRow: {
-    display: "flex", alignItems: "center", gap: 7, fontSize: 10.5, color: C.faint,
-    fontVariantNumeric: "tabular-nums",
+  chip: {
+    padding: "2px 8px", borderRadius: RADIUS.pill, background: BRAND.wash,
+    border: `1px solid ${BRAND.edge}`, color: BRAND.brandText, fontSize: 10.5,
+    fontFamily: FONT.product,
   },
 
-  warn: {
-    padding: "10px 12px", borderRadius: 8, fontSize: 11.5, lineHeight: 1.6,
-    color: C.dim, background: "rgba(210,153,34,0.08)", border: "1px solid rgba(210,153,34,0.3)",
-    fontFamily: "system-ui",
+  summaryRow: { display: "flex", gap: 10, flexWrap: "wrap", alignItems: "stretch" },
+  summaryNeutral: {
+    flex: 1, minWidth: 220, padding: "12px 14px", borderRadius: RADIUS.box,
+    background: SURFACE.s1, border: `1px solid ${BORDER.b1}`,
+    display: "flex", flexDirection: "column",
+  },
+  summaryWarn: {
+    flex: 1, minWidth: 220, padding: "12px 14px", borderRadius: RADIUS.box,
+    background: STATE.warnWash, border: `1px solid ${STATE.warnEdge}`,
+    display: "flex", flexDirection: "column",
   },
 
-  list: { display: "flex", flexDirection: "column", gap: 2 },
-  row: {
-    display: "flex", alignItems: "center", gap: 9, padding: "5px 8px",
-    borderRadius: 6, cursor: "pointer", fontSize: 11.5,
+  fileCard: {
+    borderRadius: RADIUS.box, background: SURFACE.s1, border: `1px solid ${BORDER.b1}`,
+    padding: "12px 14px", display: "flex", flexDirection: "column", gap: 9,
   },
-  kind: {
-    fontSize: 9.5, width: 52, flexShrink: 0, textTransform: "uppercase",
-    letterSpacing: 0.5, fontFamily: "system-ui",
-  },
-  path: {
-    fontFamily: "Menlo, monospace", fontSize: 11, color: C.fg,
-    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "52ch",
-  },
-  tag: {
-    fontSize: 9.5, color: C.faint, border: `1px solid ${C.line}`,
-    borderRadius: 4, padding: "0 5px", flexShrink: 0,
-  },
-  openBtn: {
-    padding: "1px 8px", borderRadius: 4, border: `1px solid ${C.line}`,
-    background: "transparent", color: C.dim, fontSize: 10, cursor: "pointer",
-    flexShrink: 0, fontFamily: "system-ui",
-  },
-  none: { fontSize: 11.5, color: C.faint, padding: "4px 8px", fontFamily: "system-ui" },
-
-  coverage: {
-    padding: "10px 12px", borderRadius: 8, fontSize: 11.5, lineHeight: 1.6,
-    color: C.dim, background: C.bg, border: `1px dashed ${C.line}`, fontFamily: "system-ui",
+  fileHead: { display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" },
+  filePath: { ...TYPE.mono115, fontWeight: 500, color: INK.i1 },
+  linkBtn: {
+    background: "transparent", border: "none", color: BRAND.brandText,
+    ...TYPE.body115, cursor: "pointer", padding: 0,
   },
 
-  histRow: {
-    display: "flex", alignItems: "baseline", gap: 10, padding: "3px 8px",
-    fontSize: 11, borderRadius: 5,
+  wasIsNow: { display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 10 },
+  was: { padding: "9px 11px", borderRadius: 7, background: "rgba(210,204,192,.05)" },
+  isNow: { padding: "9px 11px", borderRadius: 7, background: "rgba(82,81,253,.1)" },
+  colLabel: { ...TYPE.mono105, fontSize: 9.5, color: INK.i5, marginBottom: 5 },
+
+  carriedList: { display: "flex", flexWrap: "wrap", gap: 6 },
+  carriedItem: {
+    ...TYPE.mono105, color: INK.i4, background: SURFACE.s2,
+    border: `1px solid ${BORDER.b1}`, borderRadius: RADIUS.chip, padding: "3px 8px",
   },
+
+  actions: { display: "flex", gap: 8, alignItems: "center", paddingTop: 4, flexWrap: "wrap" },
+  primary: {
+    height: 36, padding: "0 18px", border: "none", borderRadius: 8,
+    background: BRAND.brand, color: INK.i1, ...TYPE.body125, fontWeight: 500,
+    cursor: "not-allowed", boxShadow: SHADOW.brand, opacity: 0.45,
+  },
+  secondary: {
+    height: 36, padding: "0 16px", borderRadius: 8,
+    border: `1px solid ${BORDER.b2}`, background: "transparent", color: INK.i2,
+    ...TYPE.body125, cursor: "not-allowed", opacity: 0.45,
+  },
+
+  histRow: { display: "flex", alignItems: "baseline", gap: 12 },
   histWhen: {
-    color: C.faint, fontSize: 10, width: 58, flexShrink: 0,
+    ...TYPE.mono105, color: INK.i5, width: 62, flexShrink: 0,
     fontVariantNumeric: "tabular-nums",
   },
-  histPrompt: {
-    color: C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-    fontFamily: "system-ui",
+  histText: {
+    ...TYPE.body115, color: INK.i3,
+    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
   },
 };
