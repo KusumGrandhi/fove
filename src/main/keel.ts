@@ -12,11 +12,18 @@
  * overlay says so rather than showing a confident list built on nothing.
  */
 
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { readTranscript } from "../data/transcript.js";
 import { splitTurns, latestTurn, looksFinished, type Turn, type TurnRecord } from "../shared/turns.js";
 import { compareSnapshots, summarise, confidence, type ChangeSet } from "../shared/changeset.js";
 import { SnapshotStore, takeSnapshot } from "./snapshots.js";
 import type { ClaudeSessionService } from "./claudeSession.js";
+
+const execFileP = promisify(execFile);
+import { fileContract, type FileContract } from "./contract.js";
+import { byAttention, type WorklistFile, type Tone } from "../shared/worklist.js";
+import { findInterpreters } from "./interpreters.js";
 
 /** Why a turn has no change set. Each one means something different. */
 export type UnboundedReason =
@@ -57,6 +64,8 @@ export interface TurnReview {
  */
 export class KeelService {
   private readonly snapshots = new SnapshotStore();
+  /** Resolved once: probing interpreters costs a process start each. */
+  private pythonPromise: Promise<string | undefined> | null = null;
 
   constructor(private readonly sessions: ClaudeSessionService) {}
 
@@ -129,6 +138,114 @@ export class KeelService {
   }
 
   /**
+   * The workspace's files, ranked by attention.
+   *
+   * Tone comes from what is actually known today: git says what is dirty and
+   * what the current turn touched, and the snapshot store says which of those
+   * moved inside the window. The handoff's `failing` and `drifted` tones need
+   * intents and telemetry, so nothing is given those tones yet -- an empty
+   * category is honest, a fabricated one is not.
+   */
+  async worklist(cwd: string): Promise<Worklist> {
+    const now = await takeSnapshot(cwd);
+    if (!now) return { files: [], total: 0 };
+
+    const opening = this.snapshots.opening(cwd);
+    const changedInTurn = new Set<string>();
+    if (opening) {
+      for (const c of compareSnapshots(opening, now).changed) changedInTurn.add(c.path);
+    }
+
+    const files: WorklistFile[] = now.files.map((f) => {
+      // "changed" is reserved for movement inside the turn window; a file that
+      // was already dirty when the turn began is dirty, not this turn's work.
+      const tone: Tone = changedInTurn.has(f.path) ? "changed" : "normal";
+      return {
+        path: f.path,
+        tone,
+        badge: changedInTurn.has(f.path) ? "this turn" : f.status,
+        touchedAt: changedInTurn.has(f.path) ? now.takenAt : undefined,
+      };
+    });
+
+    /*
+     * Recently committed files, so a clean repository still has a worklist.
+     *
+     * Built from uncommitted files alone, this column was empty on `core` --
+     * which is clean -- and an empty tree makes the whole left column useless
+     * exactly when you have just finished something. Recent commits are what
+     * you were working on, and that is the question the column answers.
+     */
+    const seen = new Set(files.map((f) => f.path));
+    for (const path of await this.recentlyCommitted(cwd)) {
+      if (seen.has(path)) continue;
+      seen.add(path);
+      files.push({ path, tone: "normal", badge: "recent" });
+    }
+
+    return { files: byAttention(files), total: files.length };
+  }
+
+  /** Paths touched by the last handful of commits, newest first. */
+  private async recentlyCommitted(cwd: string, limit = 15): Promise<string[]> {
+    try {
+      const { stdout } = await execFileP(
+        "git",
+        ["log", `-${limit}`, "--name-only", "--format=", "--diff-filter=d"],
+        { cwd, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
+      );
+      const out: string[] = [];
+      const seen = new Set<string>();
+      for (const line of stdout.split("\n")) {
+        const p = line.trim();
+        if (!p || seen.has(p)) continue;
+        seen.add(p);
+        out.push(p);
+        // A card column is not a file browser; past a point this is noise.
+        if (out.length >= 60) break;
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * A file card: its contract, and where its purpose comes from.
+   *
+   * Rule 2 of the handoff -- generated, never authored. Purpose is inferred and
+   * *labelled* as inferred until intents exist, because the design's own
+   * "no intent" state is the honest default here rather than an edge case.
+   */
+  async card(cwd: string, path: string): Promise<{
+    contract: FileContract;
+    purpose: string;
+    purposeInferred: boolean;
+  }> {
+    const python = await this.python();
+    const full = path.startsWith("/") ? path : `${cwd}/${path}`;
+    const contract = await fileContract(full, python);
+
+    // The best available purpose: the first docstring on the surface. Not a
+    // summary of the file, and the UI says so.
+    const documented = contract.entries.find((e) => e.summary);
+    const purpose = documented?.summary
+      ?? (contract.entries.length > 0
+        ? `Exports ${contract.entries.length} name${contract.entries.length === 1 ? "" : "s"}. No description in the source.`
+        : "No exported surface and no description.");
+
+    return { contract, purpose, purposeInferred: true };
+  }
+
+  /** The interpreter to extract Python contracts with, resolved once. */
+  private python(): Promise<string | undefined> {
+    this.pythonPromise ??= findInterpreters(process.cwd())
+      .then((list) => list.find((i) => i.version)?.path)
+      .catch(() => undefined);
+    return this.pythonPromise;
+  }
+
+  /**
    * Turn records for a session, or an empty list when none can be read.
    *
    * Prefers the named pane's own session, then falls back to the workspace's
@@ -177,4 +294,11 @@ export class KeelService {
     }
     return splitTurns(records);
   }
+}
+
+/** A workspace's files, ranked by attention. See `worklist.ts` for the order. */
+export interface Worklist {
+  files: WorklistFile[];
+  /** Total files considered, so the header can say "4 of 312". */
+  total: number;
 }

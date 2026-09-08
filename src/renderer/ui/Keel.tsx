@@ -28,7 +28,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ChangeSet, ChangeKind, FileChange } from "../../shared/changeset.js";
-import { SURFACE, BORDER, INK, BRAND, STATE, FONT, TYPE, RADIUS, SHADOW } from "./keel-tokens.js";
+import { SURFACE, BORDER, INK, BRAND, STATE, FONT, TYPE, RADIUS, SHADOW, cleanPrompt } from "./keel-tokens.js";
 
 interface TurnLite {
   id: string;
@@ -82,19 +82,6 @@ function consequence(f: FileChange): { text: string; risky: boolean } {
     };
   }
   return { text: "Was clean at the start of the turn, so this change belongs to it.", risky: false };
-}
-
-/**
- * Strip IDE context the editor prepends to a prompt.
- *
- * `<ide_selection>` wraps the code you had highlighted. It is genuinely part of
- * the turn, so `turns.ts` keeps it — but it is context rather than the
- * question, and 400 characters of Python where the prompt should be makes the
- * history unreadable.
- */
-function cleanPrompt(text: string): string {
-  const stripped = text.replace(/<ide_selection>[\s\S]*?<\/ide_selection>/g, "").trim();
-  return stripped || text.slice(0, 200);
 }
 
 const rel = (ms: number): string => {

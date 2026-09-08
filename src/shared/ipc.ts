@@ -43,6 +43,8 @@ export const CH = {
   gitCommitParents: "git:commit-parents",
   keelTurn: "keel:turn",
   keelBegin: "keel:begin",
+  keelWorklist: "keel:worklist",
+  keelCard: "keel:card",
   gitBlame: "git:blame",
   gitBranches: "git:branches",
   openInEditor: "open:editor",

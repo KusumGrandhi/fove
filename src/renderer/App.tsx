@@ -23,6 +23,7 @@ import { TeammateBar, TeammateView, useTeammates } from "./ui/Teammates.js";
 import { C, Divider, LayoutMenu, ToolButton } from "./ui/Chrome.js";
 import { Palette, type PaletteItem } from "./ui/Palette.js";
 import { Keel, type TurnReview } from "./ui/Keel.js";
+import { KeelWorkspace, type WorklistWire, type CardWire } from "./ui/KeelWorkspace.js";
 import type { WorktreeStatus } from "../main/worktrees.js";
 import { THEMES, DEFAULT_THEME, applyTheme } from "./ui/themes.js";
 import { close as closeTab, insert as insertTab, setPinned } from "../shared/tabs.js";
@@ -353,6 +354,12 @@ export function App() {
   const [keelOpen, setKeelOpen] = useState(false);
   const [keelReview, setKeelReview] = useState<TurnReview | null>(null);
   const [keelLoading, setKeelLoading] = useState(false);
+  /** Which Keel view is showing: the workspace, or the last turn's review. */
+  const [keelView, setKeelView] = useState<"workspace" | "turn">("workspace");
+  const [worklist, setWorklist] = useState<WorklistWire | null>(null);
+  const [cards, setCards] = useState<Record<string, CardWire | undefined>>({});
+  /** Open file cards. Capped at two, per rule 4; a third closes the oldest. */
+  const [openCards, setOpenCards] = useState<string[]>([]);
 
   /**
    * Whether the stats rail is collapsed to a spine.
@@ -713,10 +720,29 @@ export function App() {
     }
   }, [active, railPaneId]);
 
+  const loadWorklist = useCallback(async () => {
+    if (!active) return;
+    setWorklist((await window.th.keelWorklist(active.cwd)) as WorklistWire);
+  }, [active]);
+
+  /** Open a file card. Rule 4: two at a time, a third closes the oldest. */
+  const openCard = useCallback(async (path: string) => {
+    if (!active) return;
+    setOpenCards((prev) => {
+      if (prev.includes(path)) return prev;
+      return [...prev, path].slice(-2);
+    });
+    if (cards[path]) return;
+    const card = (await window.th.keelCard(active.cwd, path)) as CardWire;
+    setCards((prev) => ({ ...prev, [path]: card }));
+  }, [active, cards]);
+
   const openKeel = useCallback(() => {
     setKeelOpen(true);
+    setKeelView("workspace");
+    void loadWorklist();
     void loadKeel();
-  }, [loadKeel]);
+  }, [loadKeel, loadWorklist]);
 
   /*
    * Start watching every workspace as it becomes active.
@@ -904,12 +930,34 @@ export function App() {
       )}
 
       {/* A diff Claude is blocked on. One at a time; the rest wait behind it. */}
-      {keelOpen && active && (
+      {keelOpen && active && keelView === "workspace" && (
+        <KeelWorkspace
+          cwd={active.cwd}
+          worklist={worklist}
+          cards={cards}
+          open={openCards}
+          agent={keelReview ? {
+            task: keelReview.turn?.prompt,
+            running: keelReview.running,
+          } : null}
+          onOpenFile={(p) => void openCard(p)}
+          onOpenInPane={(p) => {
+            // Reading code is what the panes are for; the card is the summary
+            // you decide from, not the place you read.
+            setKeelOpen(false);
+            openInPaneRef.current(`${active.cwd}/${p}`);
+          }}
+          onClose={() => setKeelOpen(false)}
+          onShowTurn={() => setKeelView("turn")}
+        />
+      )}
+
+      {keelOpen && active && keelView === "turn" && (
         <Keel
           review={keelReview}
           loading={keelLoading}
           cwd={active.cwd}
-          onClose={() => setKeelOpen(false)}
+          onClose={() => setKeelView("workspace")}
           onRefresh={() => void loadKeel()}
           onOpenFile={(path, line) => {
             // Opening a file is why you close Keel: the panes are the place to

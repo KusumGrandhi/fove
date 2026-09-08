@@ -270,6 +270,8 @@ ipcMain.handle(CH.gitCommitParents, (_e, cwd: string, commit: string) =>
 // ---- keel ------------------------------------------------------------------
 const keel = new KeelService(claudeSvc);
 ipcMain.handle(CH.keelBegin, (_e, cwd: string) => keel.begin(cwd));
+ipcMain.handle(CH.keelWorklist, (_e, cwd: string) => keel.worklist(cwd));
+ipcMain.handle(CH.keelCard, (_e, cwd: string, path: string) => keel.card(cwd, path));
 ipcMain.handle(CH.keelTurn, (_e, cwd: string, paneId?: string) => {
   // Same translation as claudeSnapshot: a pane id names the session to read,
   // and the pid never crosses into the renderer.

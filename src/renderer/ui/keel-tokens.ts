@@ -114,3 +114,20 @@ export const TYPE = {
 
 /** Radii, from the handoff: pill / card / inner box / chip. */
 export const RADIUS = { pill: 999, card: 12, box: 9, chip: 6 } as const;
+
+/**
+ * Strip IDE context the editor prepends to a prompt.
+ *
+ * `<ide_selection>` wraps the code you had highlighted. It is genuinely part of
+ * the turn, so `turns.ts` keeps it -- but it is context rather than the
+ * question, and 400 characters of Python where the task should be makes the
+ * rail unreadable. Shared by both Keel views because the first version of this
+ * lived in one of them and the other leaked raw markup.
+ */
+export function cleanPrompt(text: string): string {
+  const stripped = text
+    .replace(/<ide_selection>[\s\S]*?<\/ide_selection>/g, "")
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+    .trim();
+  return stripped || text.slice(0, 200);
+}

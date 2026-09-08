@@ -38,6 +38,8 @@ const CH = {
   gitCommitParents: "git:commit-parents",
   keelTurn: "keel:turn",
   keelBegin: "keel:begin",
+  keelWorklist: "keel:worklist",
+  keelCard: "keel:card",
   gitBlame: "git:blame",
   gitBranches: "git:branches",
   openInEditor: "open:editor",
@@ -309,6 +311,9 @@ const api = {
   keelTurn: (cwd: string, paneId?: string): Promise<unknown> =>
     ipcRenderer.invoke(CH.keelTurn, cwd, paneId),
   keelBegin: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.keelBegin, cwd),
+  keelWorklist: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.keelWorklist, cwd),
+  keelCard: (cwd: string, path: string): Promise<unknown> =>
+    ipcRenderer.invoke(CH.keelCard, cwd, path),
   gitBlame: (cwd: string, path: string): Promise<unknown[]> =>
     ipcRenderer.invoke(CH.gitBlame, cwd, path),
   gitBranches: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.gitBranches, cwd),
