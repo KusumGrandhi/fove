@@ -267,7 +267,7 @@ The Keel design assumes a codebase this one is not. Measured, not guessed:
 | Design dependency | Reality in `core` |
 |---|---|
 | `.intent` sibling per file | **0 exist** across 2,571 Python files **[verified]** |
-| Contract extracted at build | Python, **39% of 22,767 defs have return annotations** **[verified]**. No build step emits a type surface. |
+| Contract extracted at build | ~~Blocked~~ — **wrong, and corrected.** 39% of defs carry return annotations, but the *exported surface* comes from the AST regardless: **120/120 sampled files parse, 75% have a public surface** **[verified]**. A partial contract is still a contract. |
 | Invariants `proven` per build | Needs a clause→mechanism index that does not exist |
 | Telemetry keyed by file path | Sentry is per-exception; nothing keys metrics to paths **[verified]** |
 | Shadow run against mirrored traffic | Infrastructure that does not exist and is not fove's to build |
@@ -279,20 +279,29 @@ claim — cannot be honoured.** Honoured literally, no claim is ever filed and t
 review screen is dead. Dropped, `2c` loses its strongest guarantee. We drop it
 and say so: Keel reviews *changes*, not *proofs*.
 
-**Rule 2 — "a card is generated, never authored" — is the rule that breaks.**
-It is what makes a card immune to going stale, and it needs a type surface
-Python does not give us. Every card in `core` would sit in the handoff's
-*no intent / inferred* state, which the design treats as an edge case and which
-would be the norm.
+**Rule 2 — "a card is generated, never authored" — holds after all.**
+An earlier version of this document called it blocked on a type surface Python
+could not give. That was wrong: `ast` yields names, parameters and whatever
+annotations exist, deterministically, on every file that parses. Cards will
+often sit in the handoff's *no intent / inferred* state, but the design already
+specifies that state — treating it as an edge case to avoid, rather than as the
+honest default, was the actual error.
 
 **Rule 3 — no editor in the resting layout — is deliberately not adopted.** The
 overlay decision in §0 makes it unnecessary: the editor stays, Keel is what you
 open. The handoff states rule 3 as a bet and says telemetry should settle it.
 We have no telemetry, and the editor is what is being used today.
 
-**Not built: the `4a` file card and the `2b` relationship navigator.** Both are
-downstream of a contract model we do not have. Revisit if the type surface ever
-becomes real.
+**`4a` is being built** — it is the handoff's own step 1, *"everything else
+hangs off the card component"*, and it is what makes a handoff trustable rather
+than merely reviewable. Its tree and agent rail need nothing new; its file card
+needs the AST contract above and degrades honestly where there is no intent.
+
+**Not built: `2b`**, the relationship navigator — an explicit alternative to
+`4a` in the handoff, not an addition. Ship one.
+
+**Not built: `2e`**, the live view. It needs telemetry keyed by file path and
+there is none. The stats rail is the right eventual home for it.
 
 **`3a` is a pitch artifact**, not a product surface — the handoff says so
 itself. If it is wanted, it belongs in a README.
