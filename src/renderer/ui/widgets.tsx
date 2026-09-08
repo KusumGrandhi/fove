@@ -59,6 +59,14 @@ export function useSnapshot(
 ): Snapshot | null {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   useEffect(() => {
+    // An empty cwd means "nothing is watching": no claude pane in this
+    // workspace, or the rail is collapsed and nothing would render the result.
+    // Idle rather than polling -- this fires every 2.5s for the life of the
+    // app, so a poll nobody reads is a real cost, not a theoretical one.
+    if (!cwd) {
+      setSnap(null);
+      return;
+    }
     let alive = true;
     const tick = async () => {
       const s = (await window.th.claudeSnapshot(cwd, paneId)) as Snapshot | null;

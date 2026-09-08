@@ -20,7 +20,7 @@ import { DiffView, type DiffRequest } from "./panes/DiffView.js";
 import { ModelPicker, type Provider } from "./ui/ModelPicker.js";
 import { AgentsWidget, TokensWidget, useSnapshot } from "./ui/widgets.js";
 import { TeammateBar, TeammateView, useTeammates } from "./ui/Teammates.js";
-import { C, Divider, ToolButton } from "./ui/Chrome.js";
+import { C, Divider, LayoutMenu, ToolButton } from "./ui/Chrome.js";
 import { Palette, type PaletteItem } from "./ui/Palette.js";
 import type { WorktreeStatus } from "../main/worktrees.js";
 import { THEMES, DEFAULT_THEME, applyTheme } from "./ui/themes.js";
@@ -29,6 +29,9 @@ import {
   closePane, closePaneChecked, isValid, leaf, newId, paneIds, prunePins, setPanePinned,
   split, type Dir, type Node, type Pins,
 } from "../shared/layout.js";
+import {
+  PRESETS, DEFAULT_PRESET, presetById, planPresetApply, type LayoutPreset,
+} from "../shared/layouts.js";
 
 type PaneKind = "shell" | "claude" | "git" | "editor" | "agents" | "config" | "search" | "browser" | "debug";
 
@@ -88,16 +91,39 @@ const makePane = (kind: PaneKind, cwd?: string): PaneSpec => ({
   cwd,
 });
 
-function newTab(cwd: string, kind: PaneKind = "shell", branch?: string): Tab {
-  const pane = makePane(kind, cwd);
-  return {
+/**
+ * A new workspace, arranged by a starting layout.
+ *
+ * `preset` is what a workspace begins as, not what it is: the tree is a normal
+ * tree the moment it exists, and nothing downstream knows which preset made
+ * it. Passing no preset gives a single pane, which is what the callers that
+ * genuinely want one pane (a recovery tab) still need.
+ */
+function newTab(
+  cwd: string,
+  kind: PaneKind = "shell",
+  branch?: string,
+  preset?: LayoutPreset,
+): Tab {
+  const base = {
     id: newId("t"),
     name: cwd.split("/").filter(Boolean).pop() ?? cwd,
     cwd,
     branch,
-    tree: leaf(pane.id),
-    panes: { [pane.id]: pane },
-    focusedPaneId: pane.id,
+  };
+
+  if (!preset) {
+    const pane = makePane(kind, cwd);
+    return { ...base, tree: leaf(pane.id), panes: { [pane.id]: pane }, focusedPaneId: pane.id };
+  }
+
+  const specs = preset.panes.map((k) => makePane(k, cwd));
+  const ids = specs.map((p) => p.id);
+  return {
+    ...base,
+    tree: preset.build(ids),
+    panes: Object.fromEntries(specs.map((p) => [p.id, p])),
+    focusedPaneId: ids[preset.focus] ?? ids[0]!,
   };
 }
 
@@ -107,6 +133,16 @@ export function App() {
   const restored = useRef(false);
   /** The directory panes default to: where the app was launched. */
   const [appCwd, setAppCwd] = useState<string>("");
+  /**
+   * The layout a new workspace starts in.
+   *
+   * Sticky across tabs on purpose: someone who works in Dev wants the next
+   * workspace in Dev too, and re-picking it every time would be the same
+   * papercut this feature exists to remove.
+   */
+  const [preset, setPreset] = useState<string>(DEFAULT_PRESET);
+  /** Shown when a workspace is created with no layout decided yet. */
+  const [pickingLayout, setPickingLayout] = useState<string | null>(null);
 
   // ---- restore / persist ---------------------------------------------------
   useEffect(() => {
@@ -136,8 +172,9 @@ export function App() {
             : saved!.tabs[0]!.id,
         );
       } else {
-        // First run: one workspace, the folder the app was launched from.
-        const t = newTab(cwd);
+        // First run: the folder the app was launched from, in the default
+        // layout -- a lone shell was never a useful place to start.
+        const t = newTab(cwd, "shell", undefined, presetById(DEFAULT_PRESET));
         setTabs([t]);
         setActiveTabId(t.id);
       }
@@ -230,11 +267,11 @@ export function App() {
     async (cwd?: string, branch?: string) => {
       const dir = cwd ?? (await window.th.pickFolder());
       if (!dir) return;
-      const t = newTab(dir, "shell", branch);
+      const t = newTab(dir, "shell", branch, presetById(preset));
       setTabs((prev) => insertTab(prev, t));
       setActiveTabId(t.id);
     },
-    [],
+    [preset],
   );
 
   const togglePin = useCallback((id: string) => {
@@ -303,6 +340,22 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [doSplit, doClosePane, addTab, tabs, togglePin, activeTabId, active, togglePanePin]);
 
+  /**
+   * Whether the stats rail is collapsed to a spine.
+   *
+   * Collapsed by default: the rail is a glanceable readout, not something you
+   * work in, and 260px of permanent width is a lot to spend on two small cards
+   * you look at occasionally. Stored like the theme -- per-machine, and not in
+   * the layout file, because it is a display preference rather than part of a
+   * workspace.
+   */
+  const [statsOpen, setStatsOpen] = useState<boolean>(
+    () => localStorage.getItem("fove.stats") === "open",
+  );
+  useEffect(() => {
+    localStorage.setItem("fove.stats", statsOpen ? "open" : "closed");
+  }, [statsOpen]);
+
   // The rail watches whatever directory the active tab is pointed at. The hook
   // runs unconditionally -- before the `!active` early return -- because hooks
   // cannot be called conditionally.
@@ -323,7 +376,9 @@ export function App() {
   // the folder's newest transcript is what made the rail show 569.7k for a
   // session running in someone else's editor.
   const hasClaudePane = railPaneId !== undefined;
-  const snap = useSnapshot(hasClaudePane ? railCwd : "", 2500, railPaneId);
+  // Collapsed means nothing renders the snapshot, so polling for it every
+  // 2.5s would be pure waste. An empty cwd is the hook's idle signal.
+  const snap = useSnapshot(hasClaudePane && statsOpen ? railCwd : "", 2500, railPaneId);
 
   /**
    * Diffs Claude is blocked on, oldest first. A turn can produce several, and
@@ -472,6 +527,68 @@ export function App() {
   // ---- command palette -----------------------------------------------------
 
   /**
+   * Rearrange the current workspace into a starting layout.
+   *
+   * Reuses the panes that are already open wherever the preset asks for the
+   * same kind, and this is the whole reason the function is more than four
+   * lines: a `claude` pane holds a live session with real scrollback, and a
+   * `shell` pane holds a PTY with your history in it. Rebuilding those from
+   * scratch to satisfy a layout would throw away work to tidy the furniture.
+   *
+   * Panes the preset has no place for are closed, and their PTYs killed --
+   * leaving them running but unrendered would leak a process per rearrange.
+   * Pinned panes are the exception: a pin means "do not move or close this",
+   * so a layout change respects it and leaves the tab alone.
+   */
+  const applyPreset = useCallback(
+    (presetId: string) => {
+      const p = presetById(presetId);
+      if (!p || !active) return;
+      setPreset(presetId);
+
+      const pins = new Set(active.pinnedPanes ?? []);
+      const open = paneIds(active.tree)
+        .map((id) => active.panes[id])
+        .filter((spec): spec is PaneSpec => Boolean(spec));
+
+      const plan = planPresetApply(p, open, pins);
+
+      // Fill the preset's slots in order: reused panes where the planner found
+      // one, freshly made panes for the rest.
+      const fresh = plan.create.map((kind) => makePane(kind as PaneKind, active.cwd));
+      const queue = [...plan.keep];
+      const freshQueue = [...fresh];
+      const slots: PaneSpec[] = p.panes.map((kind) => {
+        const reused = queue[0];
+        if (reused && reused.kind === kind) return queue.shift() as PaneSpec;
+        return freshQueue.shift()!;
+      });
+
+      for (const id of plan.kill) window.th.kill(id);
+
+      // Surviving pins the preset had no slot for are split off the last pane,
+      // so they keep a real place on screen rather than vanishing.
+      let tree = p.build(slots.map((c) => c.id));
+      const orphans = plan.extra
+        .map((id) => active.panes[id])
+        .filter((spec): spec is PaneSpec => Boolean(spec));
+      for (const spec of orphans) {
+        tree = split(tree, slots[slots.length - 1]!.id, spec.id, "column");
+      }
+
+      const all = [...slots, ...orphans];
+      updateTab(active.id, (t) => ({
+        ...t,
+        tree,
+        panes: Object.fromEntries(all.map((c) => [c.id, c])),
+        pinnedPanes: [...prunePins(pins, tree)],
+        focusedPaneId: slots[p.focus]?.id ?? slots[0]!.id,
+      }));
+    },
+    [active, updateTab],
+  );
+
+  /**
    * Everything the palette can do: worktrees first, then commands.
    *
    * Worktrees lead because they are the reason the palette exists -- the
@@ -519,6 +636,19 @@ export function App() {
 
     const cmd = (id: string, label: string, hint: string, run: () => void): PaletteItem =>
       ({ id, label, icon: "›", hint, run });
+
+    // Layouts, above the generic commands: rearranging the workspace is a
+    // bigger action than opening one more pane, and worth finding first.
+    for (const p of PRESETS) {
+      items.push({
+        id: `layout:${p.id}`,
+        label: `Layout: ${p.label}`,
+        icon: "▦",
+        hint: p.hint,
+        priority: 1,
+        run: () => applyPreset(p.id),
+      });
+    }
 
     items.push(
       cmd("cmd:claude", "New Claude pane", "⌘↵", () => doSplit("row", "claude")),
@@ -662,6 +792,8 @@ export function App() {
 
       {/* --- toolbar: every shortcut, clickable --- */}
       <div style={S.toolbar}>
+        <LayoutMenu presets={PRESETS} current={preset} onPick={applyPreset} />
+        <Divider />
         <ToolButton label="Split" hint="⌘D" icon="▊▊" onClick={() => doSplit("row")} />
         <ToolButton label="Split down" hint="⌘⇧D" icon="▤" onClick={() => doSplit("column")} />
         <Divider />
@@ -861,13 +993,32 @@ export function App() {
           />
         </div>
 
-        {/* Stats rail: permanent, intentionally empty. Widgets land here. */}
-        <aside style={S.rail}>
-          <div style={S.railHeader}>STATS</div>
-          <div style={S.railBody}>
-            <TokensWidget snap={snap} />
-            <AgentsWidget snap={snap} />
+        {/* Stats rail. Collapses to a spine; the toggle stays visible either way. */}
+        <aside style={statsOpen ? S.rail : S.railClosed}>
+          <div style={statsOpen ? S.railHeader : S.railHeaderClosed}>
+            {statsOpen && <span>STATS</span>}
+            {statsOpen && <div style={S.grow} />}
+            <button
+              onClick={() => setStatsOpen((v) => !v)}
+              title={statsOpen ? "Hide stats" : "Show stats"}
+              aria-label={statsOpen ? "Hide stats" : "Show stats"}
+              aria-expanded={statsOpen}
+              style={S.railToggle}
+              onMouseEnter={(e) => { e.currentTarget.style.color = C.fg; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = C.faint; }}
+            >
+              {statsOpen ? "›" : "‹"}
+            </button>
           </div>
+          {statsOpen ? (
+            <div style={S.railBody}>
+              <TokensWidget snap={snap} />
+              <AgentsWidget snap={snap} />
+            </div>
+          ) : (
+            // Vertical label, so the spine still says what it opens.
+            <div style={S.railSpine} onClick={() => setStatsOpen(true)}>STATS</div>
+          )}
         </aside>
       </div>
 
@@ -976,9 +1127,30 @@ const S: Record<string, React.CSSProperties> = {
     background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10,
     overflow: "hidden",
   },
+  railClosed: {
+    width: 26, flexShrink: 0, marginLeft: 10,
+    display: "flex", flexDirection: "column",
+    background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10,
+    overflow: "hidden",
+  },
   railHeader: {
-    padding: "7px 11px", fontSize: 10, letterSpacing: 0.6, color: C.faint,
+    display: "flex", alignItems: "center", gap: 4,
+    padding: "5px 6px 5px 11px", fontSize: 10, letterSpacing: 0.6, color: C.faint,
     borderBottom: `1px solid ${C.line}`, flexShrink: 0,
+  },
+  railHeaderClosed: {
+    display: "flex", alignItems: "center", justifyContent: "center",
+    padding: "5px 0", borderBottom: `1px solid ${C.line}`, flexShrink: 0,
+  },
+  railToggle: {
+    border: "1px solid transparent", background: "transparent", color: C.faint,
+    borderRadius: 4, cursor: "pointer", fontSize: 13, lineHeight: "14px",
+    padding: "1px 5px", transition: "color 90ms",
+  },
+  railSpine: {
+    flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
+    writingMode: "vertical-rl", fontSize: 10, letterSpacing: 1.2,
+    color: C.faint, cursor: "pointer", userSelect: "none",
   },
   railBody: { flex: 1, minHeight: 0, overflowY: "auto", padding: 10 },
   railPlaceholder: {

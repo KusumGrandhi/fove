@@ -5,7 +5,7 @@
  * for speed, but nothing is discoverable only by knowing it already exists.
  */
 
-import type { CSSProperties, ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 /**
  * The app's colours, as CSS variable references.
@@ -53,6 +53,81 @@ export function ToolButton(props: {
   );
 }
 
+/**
+ * The starting-layout picker.
+ *
+ * A dropdown rather than a cycling button: with three presets, cycling means
+ * two wrong stops on the way to the one you wanted, and each stop rearranges
+ * the workspace.
+ */
+export function LayoutMenu(props: {
+  presets: { id: string; label: string; hint: string }[];
+  current: string;
+  onPick: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const hostRef = useRef<HTMLDivElement>(null);
+
+  // Dismiss on an outside click or Escape, like every other menu on the system.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!hostRef.current?.contains(e.target as globalThis.Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); setOpen(false); }
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [open]);
+
+  const label = props.presets.find((p) => p.id === props.current)?.label ?? "Layout";
+
+  return (
+    <div ref={hostRef} style={{ position: "relative", WebkitAppRegion: "no-drag" } as CSSProperties}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title="Starting layout for this workspace"
+        style={{ ...btn, color: open ? C.fg : C.dim, background: open ? C.chromeHi : "transparent" }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = C.chromeHi; }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = open ? C.chromeHi : "transparent";
+        }}
+      >
+        <span style={{ fontSize: 13, lineHeight: 1 }}>▦</span>
+        <span>{label}</span>
+        <span style={{ fontSize: 9, color: C.faint }}>▾</span>
+      </button>
+
+      {open && (
+        <div style={menu}>
+          {props.presets.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => { setOpen(false); props.onPick(p.id); }}
+              style={{ ...menuItem, background: p.id === props.current ? C.chromeHi : "transparent" }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = C.chromeHi; }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = p.id === props.current ? C.chromeHi : "transparent";
+              }}
+            >
+              <span style={{ color: C.fg, fontSize: 12 }}>{p.label}</span>
+              <span style={{ color: C.faint, fontSize: 10.5, lineHeight: 1.4 }}>{p.hint}</span>
+            </button>
+          ))}
+          <div style={menuNote}>
+            Rearranges this workspace. Open panes of the same kind are kept.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Divider() {
   return <div style={{ width: 1, height: 18, background: C.line, margin: "0 5px", flexShrink: 0 }} />;
 }
@@ -73,6 +148,45 @@ const btn: CSSProperties = {
   // Buttons must stay clickable inside the draggable title bar.
   WebkitAppRegion: "no-drag",
 } as CSSProperties;
+
+const menu: CSSProperties = {
+  position: "absolute",
+  top: "calc(100% + 4px)",
+  left: 0,
+  zIndex: 80,
+  minWidth: 268,
+  background: C.panel,
+  border: `1px solid ${C.line}`,
+  borderRadius: 8,
+  boxShadow: "0 12px 32px rgba(0,0,0,0.5)",
+  overflow: "hidden",
+  padding: 4,
+};
+
+const menuItem: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: 2,
+  width: "100%",
+  textAlign: "left",
+  padding: "7px 9px",
+  border: "1px solid transparent",
+  borderRadius: 6,
+  background: "transparent",
+  cursor: "pointer",
+  fontFamily: "system-ui",
+};
+
+const menuNote: CSSProperties = {
+  padding: "6px 9px 4px",
+  marginTop: 2,
+  borderTop: `1px solid ${C.line}`,
+  color: C.faint,
+  fontFamily: "system-ui",
+  fontSize: 10,
+  lineHeight: 1.45,
+};
 
 const kbdStyle: CSSProperties = {
   fontFamily: "system-ui",
