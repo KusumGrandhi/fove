@@ -299,11 +299,43 @@ export class GitWriteService {
    * a commit subject can contain anything, newlines included. Letting git's
    * own `--graph` ASCII art through would mean parsing drawing characters back
    * into a DAG; the parent list is the real structure.
+   *
+   * Three choices here exist to make the drawn graph readable, and all three
+   * were measured against a real repository with ~20 active branches:
+   *
+   *   - `--topo-order`, because git's default is strict reverse-chronological.
+   *     When many branches are worked on the same day that interleaves them
+   *     commit by commit, so consecutive rows belong to different branches and
+   *     every lane zigzags. Measured on that repo: 58% of rows broke their
+   *     lane by date, 26% by topology. Topological order keeps a branch's
+   *     commits contiguous, which is what makes the lanes trace.
+   *
+   *   - `--branches --remotes --tags` rather than `--all`, because `--all`
+   *     includes `refs/stash`, and each stash contributes up to three commits
+   *     ("WIP on…", "index on…", "untracked files on…"). With 53 stashes that
+   *     is noise at the top of the graph where the newest real work should be.
+   *     `--exclude=refs/stash` does *not* remove them; dropping `--all` does.
+   *
+   *   - `HEAD` explicitly, because losing `--all` would otherwise lose a
+   *     detached HEAD — the commit you are actually sitting on would vanish
+   *     from the graph. Verified in a fixture; it matters here because
+   *     worktrees can leave HEAD detached.
+   *
+   * `all: false` answers a different and more common question: "what is on the
+   * branch I am on". It follows first parents from HEAD only, which is one
+   * straight line — your commits, then the trunk history you branched from,
+   * with nobody else's branches in it. On a repo where twenty branches are
+   * active the same day, that is the difference between a readable graph and
+   * a thicket; HEAD sits at row 43 of the full view here, which is no use.
    */
   async log(cwd: string, limit = 200, all = true): Promise<Commit[]> {
     const fmt = ["%H", "%P", "%an", "%ae", "%at", "%s", "%D"].join(FMT_NUL) + FMT_REC;
-    const args = ["log", `--max-count=${limit}`, `--format=${fmt}`];
-    if (all) args.push("--all");
+    const args = ["log", "--topo-order", `--max-count=${limit}`, `--format=${fmt}`];
+    if (all) args.push("HEAD", "--branches", "--remotes", "--tags");
+    // --first-parent so a merge brings in its own line rather than everything
+    // the merged branch ever carried, which would put other people's commits
+    // back into a view whose whole point is that it excludes them.
+    else args.push("HEAD", "--first-parent");
     try {
       const out = await readGit(cwd, args);
       return out

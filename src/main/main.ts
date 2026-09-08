@@ -257,7 +257,14 @@ ipcMain.handle(CH.gitStashPop, (_e, cwd: string, ref?: string) => gitw.stashPop(
 ipcMain.handle(CH.gitStashApply, (_e, cwd: string, ref?: string) => gitw.stashApply(cwd, ref));
 ipcMain.handle(CH.gitStashDrop, (_e, cwd: string, ref?: string) => gitw.stashDrop(cwd, ref));
 ipcMain.handle(CH.gitStashList, (_e, cwd: string) => gitw.stashList(cwd));
-ipcMain.handle(CH.gitCommits, (_e, cwd: string, limit?: number) => gitw.log(cwd, limit ?? 200));
+ipcMain.handle(CH.gitCommits, (_e, cwd: string, limit?: number, all?: boolean) =>
+  gitw.log(cwd, limit ?? 200, all ?? true),
+);
+// gitSvc, not gitw: this sits beside `diff`, which is the only caller that
+// needs it and the reason it exists.
+ipcMain.handle(CH.gitCommitParents, (_e, cwd: string, commit: string) =>
+  gitSvc.parentCount(cwd, commit),
+);
 ipcMain.handle(CH.gitBlame, (_e, cwd: string, path: string) => gitw.blame(cwd, path));
 ipcMain.handle(CH.gitBranches, (_e, cwd: string) => gitw.branches(cwd));
 

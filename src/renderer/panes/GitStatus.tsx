@@ -104,6 +104,7 @@ export function GitStatusPane(props: {
         staged={(status?.files ?? []).filter((f) => f.staged !== null).map((f) => f.path)}
         unstaged={(status?.files ?? []).filter((f) => f.unstaged !== null).map((f) => f.path)}
         onChanged={() => void refresh()}
+        onOpen={props.onOpen}
       />
 
       <div style={S.split}>

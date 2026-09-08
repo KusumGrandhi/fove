@@ -59,19 +59,65 @@ export class GitService {
   }
 
   /**
+   * How many parents a commit has: 0 for a root, 1 normally, 2+ for a merge.
+   *
+   * This decides how the commit can be diffed at all, and the three cases need
+   * three different commands -- see `diff`.
+   */
+  async parentCount(cwd: string, commit: string): Promise<number> {
+    try {
+      const out = await git(cwd, ["rev-list", "--parents", "-n1", commit]);
+      // "<sha> <parent>..." -- the first word is the commit itself.
+      return Math.max(0, out.trim().split(/\s+/).filter(Boolean).length - 1);
+    } catch {
+      return 1;
+    }
+  }
+
+  /**
    * Diff for the working tree, the index, or a specific commit.
    *
    * `staged` selects the index; `commit` overrides both and shows that commit's
    * own change. Untracked files are included via --no-index against /dev/null
    * only when explicitly asked, since that costs an extra process per file.
+   *
+   * The commit case has three shapes, and the obvious single command is wrong
+   * for two of them -- both by printing *nothing* rather than failing, which
+   * would render as "this commit changed no files":
+   *
+   *   - a root commit has no parent, so `<sha>^!` resolves to an empty range
+   *     and exits 0 with no output. It needs `show`, which diffs against the
+   *     empty tree.
+   *   - a merge prints nothing for both `<sha>^!` and a bare `show`, because
+   *     git's default for a merge is a combined diff that is suppressed unless
+   *     the merge resolved a conflict. It needs an explicit first-parent diff.
+   *
+   * All three verified against disposable fixtures, not assumed.
    */
   async diff(
     cwd: string,
     opts: { path?: string; staged?: boolean; commit?: string } = {},
   ): Promise<FileDiff[]> {
     const args = ["diff", "--no-color", "--no-ext-diff", "-M"];
-    if (opts.commit) args.push(`${opts.commit}^!`);
-    else if (opts.staged) args.push("--cached");
+
+    if (opts.commit) {
+      const parents = await this.parentCount(cwd, opts.commit);
+      if (parents === 0) {
+        // Root: `show` against the empty tree is the only thing that works.
+        args.length = 0;
+        args.push("show", "--no-color", "--no-ext-diff", "-M", "--format=", opts.commit);
+      } else if (parents > 1) {
+        // Merge: against the first parent, i.e. "what landed on this branch".
+        // That is the useful reading, and the UI labels it as such rather than
+        // presenting it as the whole truth of the merge.
+        args.push(`${opts.commit}^1..${opts.commit}`);
+      } else {
+        args.push(`${opts.commit}^!`);
+      }
+    } else if (opts.staged) {
+      args.push("--cached");
+    }
+
     if (opts.path) args.push("--", opts.path);
     try {
       return parseDiff(await git(cwd, args));

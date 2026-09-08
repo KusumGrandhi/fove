@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { C } from "../ui/Chrome.js";
 import { layout, graphWidth, type GraphRow } from "../../shared/git-graph.js";
+import type { FileDiff } from "../../shared/git-parse.js";
 
 export interface Commit {
   hash: string;
@@ -37,8 +38,19 @@ interface WriteResult {
   stderr: string;
 }
 
-/** Lane colours, cycled. Colour follows the lane, so the graph does not flicker. */
-const LANES = ["#2f6feb", "#3fb950", "#d29922", "#a371f7", "#f85149", "#39c5cf"];
+/**
+ * Lane colours, cycled. Colour follows the lane, so the graph does not flicker.
+ *
+ * Deliberately muted: with ~20 active branches the colours repeat anyway, so
+ * they read as "these are different lanes" rather than as an identity. The one
+ * lane that *is* identified -- the branch you are on -- is drawn in `HEAD_LANE`
+ * below, brighter and thicker than everything else, because "where am I" is
+ * the question this graph most often has to answer.
+ */
+const LANES = ["#5a7fb8", "#5c9668", "#a8894a", "#8a6ba3", "#a86469", "#4d9199"];
+
+/** The lane carrying HEAD. The only colour in the graph that means something. */
+const HEAD_LANE = "#2f6feb";
 
 export function GitActions(props: {
   root: string;
@@ -47,6 +59,8 @@ export function GitActions(props: {
   unstaged: string[];
   branch?: string;
   onChanged: () => void;
+  /** Open a file in the editor pane, optionally at a line. */
+  onOpen?: (path: string, line?: number) => void;
 }) {
   const { root, onChanged } = props;
   const [tab, setTab] = useState<"changes" | "graph" | "stash" | "worktree">("changes");
@@ -60,6 +74,17 @@ export function GitActions(props: {
   const [notice, setNotice] = useState<string | null>(null);
   const [commits, setCommits] = useState<Commit[]>([]);
   const [stashes, setStashes] = useState<StashEntry[]>([]);
+  /** Which commit is expanded in the graph. One at a time: this is a narrow pane. */
+  const [openCommit, setOpenCommit] = useState<string | null>(null);
+  /**
+   * Whose history the graph shows.
+   *
+   * "branch" is the default because it answers the question actually being
+   * asked most of the time -- "what is on the branch I am on" -- and because
+   * on a busy repo the full view buries HEAD dozens of rows down among other
+   * people's branches.
+   */
+  const [scope, setScope] = useState<"branch" | "all">("branch");
 
   /** Run a mutating command, surfacing git's own message on failure. */
   const act = useCallback(
@@ -80,12 +105,17 @@ export function GitActions(props: {
   );
 
   const loadGraph = useCallback(async () => {
-    setCommits((await window.th.gitCommits(root, 120)) as Commit[]);
-  }, [root]);
+    setCommits((await window.th.gitCommits(root, 120, scope === "all")) as Commit[]);
+  }, [root, scope]);
 
   const loadStashes = useCallback(async () => {
     setStashes((await window.th.gitStashList(root)) as StashEntry[]);
   }, [root]);
+
+  useEffect(() => {
+    // A commit expanded in one scope may not exist in the other.
+    setOpenCommit(null);
+  }, [scope]);
 
   useEffect(() => {
     if (tab === "graph") void loadGraph();
@@ -134,6 +164,29 @@ export function GitActions(props: {
 
   const rows = layout(commits);
   const width = graphWidth(rows);
+
+  /*
+   * The lane the checked-out branch sits in.
+   *
+   * Found by ref rather than by position: `git log` decorates the row with
+   * "HEAD -> name", and on a detached HEAD with a bare "HEAD". Matching the
+   * branch name as well covers the case where HEAD's decoration is missing but
+   * the branch tip is still in the window.
+   *
+   * -1 when the branch tip is older than the 120 commits fetched, in which
+   * case nothing is highlighted -- which is honest, rather than colouring an
+   * arbitrary lane and implying it is yours.
+   */
+  const headLane = (() => {
+    const branch = props.branch;
+    for (const r of rows) {
+      for (const ref of r.commit.refs) {
+        if (ref.startsWith("HEAD ->") || ref === "HEAD") return r.lane;
+        if (branch && (ref === branch || ref === `refs/heads/${branch}`)) return r.lane;
+      }
+    }
+    return -1;
+  })();
 
   return (
     <div style={S.wrap}>
@@ -215,13 +268,50 @@ export function GitActions(props: {
       )}
 
       {tab === "graph" && (
+        <>
+        <div style={S.scopeBar}>
+          <button
+            style={scopeStyle(scope === "branch")}
+            onClick={() => setScope("branch")}
+            title="Only this branch's line of history"
+          >
+            this branch
+          </button>
+          <button
+            style={scopeStyle(scope === "all")}
+            onClick={() => setScope("all")}
+            title="Every branch in the repository"
+          >
+            all branches
+          </button>
+          <div style={{ flex: 1 }} />
+          <span style={S.scopeNote}>
+            {scope === "branch"
+              ? props.branch ?? "detached"
+              : `${rows.length} commits, all refs`}
+          </span>
+        </div>
         <div style={S.list}>
           {rows.length === 0 ? (
             <div style={S.empty}>no commits</div>
           ) : (
-            rows.map((r) => <GraphRowView key={r.commit.hash} row={r} width={width} />)
+            rows.map((r) => (
+              <GraphRowView
+                key={r.commit.hash}
+                row={r}
+                width={width}
+                root={root}
+                open={openCommit === r.commit.hash}
+                onToggle={() =>
+                  setOpenCommit((cur) => (cur === r.commit.hash ? null : r.commit.hash))
+                }
+                onOpen={props.onOpen}
+                headLane={headLane}
+              />
+            ))
           )}
         </div>
+        </>
       )}
 
       {tab === "worktree" && (
@@ -331,14 +421,37 @@ export function GitActions(props: {
   );
 }
 
-/** One commit row: the lane graphic, then the commit itself. */
-function GraphRowView(props: { row: GraphRow<Commit>; width: number }) {
+/**
+ * One commit row: the lane graphic, then the commit itself, and -- when
+ * expanded -- every file it changed.
+ *
+ * The diff is fetched on expand rather than with the graph: 120 commits'
+ * worth of diffs is a lot of git processes for something you look at one of.
+ */
+function GraphRowView(props: {
+  row: GraphRow<Commit>;
+  width: number;
+  root: string;
+  /** Lane index carrying the checked-out branch, or -1 when it is off-window. */
+  headLane: number;
+  open: boolean;
+  onToggle: () => void;
+  onOpen?: (path: string, line?: number) => void;
+}) {
   const { row, width } = props;
+  const onHead = props.headLane >= 0;
+  const laneColor = (i: number): string =>
+    onHead && i === props.headLane ? HEAD_LANE : LANES[i % LANES.length]!;
   const COL = 12;
   const H = 22;
   const w = Math.max(1, width) * COL;
   return (
-    <div style={S.commitRow} title={`${row.commit.hash}\n${row.commit.author}`}>
+    <>
+    <div
+      style={{ ...S.commitRow, ...(props.open ? S.commitRowOpen : null) }}
+      title={`${row.commit.hash}\n${row.commit.author}`}
+      onClick={props.onToggle}
+    >
       <svg width={w} height={H} style={{ flex: `0 0 ${w}px` }}>
         {row.edges.map((e, i) => {
           const x1 = e.from * COL + COL / 2;
@@ -351,8 +464,8 @@ function GraphRowView(props: { row: GraphRow<Commit>; width: number }) {
             <path
               key={i}
               d={`M ${x1} ${y1} C ${x1} ${(y1 + y2) / 2}, ${x2} ${(y1 + y2) / 2}, ${x2} ${y2}`}
-              stroke={LANES[e.to % LANES.length]}
-              strokeWidth={1.5}
+              stroke={laneColor(e.to)}
+              strokeWidth={onHead && e.to === props.headLane ? 2.4 : 1.4}
               fill="none"
             />
           );
@@ -360,18 +473,166 @@ function GraphRowView(props: { row: GraphRow<Commit>; width: number }) {
         <circle
           cx={row.lane * COL + COL / 2}
           cy={H / 2}
-          r={3.5}
-          fill={LANES[row.lane % LANES.length]}
+          r={onHead && row.lane === props.headLane ? 4.2 : 3}
+          fill={laneColor(row.lane)}
         />
       </svg>
+      <span style={{ ...S.chev, transform: props.open ? "rotate(90deg)" : "none" }}>›</span>
       <span style={S.hash}>{row.commit.hash.slice(0, 7)}</span>
       <span style={S.subject}>{row.commit.subject}</span>
       {row.commit.refs.map((r) => (
         <span key={r} style={S.ref}>{r.replace("HEAD -> ", "")}</span>
       ))}
     </div>
+    {props.open && (
+      <CommitDetail root={props.root} commit={row.commit} onOpen={props.onOpen} />
+    )}
+    </>
   );
 }
+
+/**
+ * The files a commit changed, each expandable to its diff.
+ *
+ * A merge is labelled rather than silently reinterpreted. `git diff` on a
+ * merge shows the change against the *first* parent -- "what landed on this
+ * branch" -- which is the useful reading but is not the whole truth of the
+ * merge, and a UI that does not say so is lying by omission.
+ */
+function CommitDetail(props: {
+  root: string;
+  commit: Commit;
+  onOpen?: (path: string, line?: number) => void;
+}) {
+  const { root, commit } = props;
+  const [files, setFiles] = useState<FileDiff[] | null>(null);
+  const [parents, setParents] = useState<number | null>(null);
+  const [openFile, setOpenFile] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    setFiles(null);
+    void (async () => {
+      const [d, p] = await Promise.all([
+        window.th.gitDiff(root, { commit: commit.hash }) as Promise<FileDiff[]>,
+        window.th.gitCommitParents(root, commit.hash) as Promise<number>,
+      ]);
+      if (!live) return;
+      setParents(p);
+      setFiles(d);
+      // One changed file is the common case; open it rather than making the
+      // user click twice to see the only thing there is to see.
+      if (d.length === 1) setOpenFile(d[0]!.path);
+    })();
+    return () => { live = false; };
+  }, [root, commit.hash]);
+
+  if (files === null) {
+    return <div style={S.detailNote}>loading…</div>;
+  }
+
+  const adds = files.reduce((n, f) => n + f.additions, 0);
+  const dels = files.reduce((n, f) => n + f.deletions, 0);
+
+  return (
+    <div style={S.detail}>
+      <div style={S.detailHead}>
+        <span style={{ color: C.fg }}>{files.length} file{files.length === 1 ? "" : "s"}</span>
+        <span style={{ color: "#3fb950" }}>+{adds}</span>
+        <span style={{ color: "#f85149" }}>−{dels}</span>
+        <span style={{ flex: 1 }} />
+        <span style={S.detailAuthor}>{commit.author}</span>
+      </div>
+
+      {parents !== null && parents > 1 && (
+        <div style={S.mergeNote}>
+          merge of {parents} parents — showing the change against the first parent only
+        </div>
+      )}
+
+      {files.length === 0 && (
+        <div style={S.detailNote}>
+          {parents !== null && parents > 1
+            ? "no changes against the first parent"
+            : "no textual changes (empty commit, or binary only)"}
+        </div>
+      )}
+
+      {files.map((f) => (
+        <div key={f.path}>
+          <div
+            style={S.fileRow}
+            onClick={() => setOpenFile((cur) => (cur === f.path ? null : f.path))}
+            title={f.path}
+          >
+            <span style={{ ...S.chev, transform: openFile === f.path ? "rotate(90deg)" : "none" }}>›</span>
+            <span style={S.filePath}>
+              {f.from && <span style={{ color: C.faint }}>{f.from} → </span>}
+              {f.path}
+            </span>
+            <span style={{ color: "#3fb950" }}>+{f.additions}</span>
+            <span style={{ color: "#f85149" }}>−{f.deletions}</span>
+            <button
+              style={S.openBtn}
+              title="Open in the editor pane"
+              onClick={(e) => { e.stopPropagation(); props.onOpen?.(`${root}/${f.path}`); }}
+            >
+              open
+            </button>
+          </div>
+
+          {openFile === f.path && (
+            <div style={S.fileDiff}>
+              {f.binary ? (
+                <div style={S.detailNote}>binary file</div>
+              ) : f.hunks.length === 0 ? (
+                <div style={S.detailNote}>no textual changes</div>
+              ) : (
+                f.hunks.map((h, hi) => (
+                  <div key={hi}>
+                    <div style={S.hunkHeader}>
+                      @@ {h.oldStart} → {h.newStart} @@ {h.header}
+                    </div>
+                    {h.lines.map((l, li) => (
+                      <div
+                        key={li}
+                        style={{
+                          ...S.diffLine,
+                          background:
+                            l.kind === "add" ? "#0e2a16" : l.kind === "del" ? "#2d1214" : undefined,
+                          color: l.kind === "add" ? "#7ee787" : l.kind === "del" ? "#ffa198" : C.dim,
+                        }}
+                        title="click to open at this line"
+                        onClick={() => props.onOpen?.(`${root}/${f.path}`, l.newNo ?? l.oldNo)}
+                      >
+                        <span style={S.diffGutter}>{l.newNo ?? l.oldNo ?? ""}</span>
+                        <span style={{ width: 10, flexShrink: 0 }}>
+                          {l.kind === "add" ? "+" : l.kind === "del" ? "−" : " "}
+                        </span>
+                        <span style={S.diffCode}>{l.text || " "}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** The scope toggle reads as a segmented control, not another tab. */
+const scopeStyle = (on: boolean): React.CSSProperties => ({
+  padding: "1px 8px",
+  borderRadius: 3,
+  border: `1px solid ${on ? "#33333d" : "transparent"}`,
+  background: on ? "#1e1e28" : "transparent",
+  color: on ? C.fg : C.faint,
+  fontSize: 10.5,
+  cursor: "pointer",
+});
 
 const tabStyle = (on: boolean): React.CSSProperties => ({
   padding: "2px 9px",
@@ -414,10 +675,58 @@ const S: Record<string, React.CSSProperties> = {
   },
   notice: { margin: "4px 8px", color: "#3fb950", fontSize: 11 },
   list: { overflow: "auto", minHeight: 0, padding: "2px 0" },
+  scopeBar: {
+    display: "flex", alignItems: "center", gap: 4, padding: "3px 8px",
+    borderBottom: "1px solid #1c1c26", background: "#0e0e14",
+  },
+  scopeNote: { color: C.faint, fontSize: 10 },
   empty: { padding: 12, color: C.faint, fontSize: 11 },
   commitRow: {
     display: "flex", alignItems: "center", gap: 6, padding: "0 8px",
-    height: 22, fontSize: 11, cursor: "default",
+    height: 22, fontSize: 11, cursor: "pointer",
+  },
+  commitRowOpen: { background: "#151520" },
+  chev: {
+    color: C.faint, fontSize: 12, width: 8, flexShrink: 0,
+    transition: "transform 120ms ease", display: "inline-block",
+  },
+  detail: {
+    background: "#0d0d13", borderTop: "1px solid #23232c",
+    borderBottom: "1px solid #23232c", margin: "0 0 2px",
+  },
+  detailHead: {
+    display: "flex", alignItems: "center", gap: 8, padding: "4px 10px",
+    fontSize: 11, color: C.faint, borderBottom: "1px solid #1c1c26",
+  },
+  detailAuthor: { color: C.faint, fontSize: 10 },
+  detailNote: { padding: "6px 12px", color: C.faint, fontSize: 11 },
+  mergeNote: {
+    padding: "4px 10px", fontSize: 10, color: "#d29922",
+    background: "#1d1a10", borderBottom: "1px solid #1c1c26",
+  },
+  fileRow: {
+    display: "flex", alignItems: "center", gap: 8, padding: "2px 10px",
+    fontSize: 11, cursor: "pointer", lineHeight: "18px",
+  },
+  filePath: {
+    flex: 1, color: C.fg, fontFamily: 'Menlo, "SF Mono", monospace', fontSize: 10.5,
+    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", direction: "rtl",
+    textAlign: "left",
+  },
+  fileDiff: {
+    fontFamily: 'Menlo, "SF Mono", monospace', fontSize: 10.5,
+    borderTop: "1px solid #1c1c26", borderBottom: "1px solid #1c1c26",
+    // Proportional, not a fixed 320px: this pane is often short (it shares a
+    // column with a shell), and a fixed height there clips the diff to a few
+    // lines while wasting space in a tall pane.
+    maxHeight: "min(46vh, 420px)", overflow: "auto", background: C.bg,
+  },
+  diffLine: { display: "flex", cursor: "pointer", lineHeight: "15px", whiteSpace: "pre" },
+  diffGutter: { width: 40, textAlign: "right", paddingRight: 8, color: C.faint, flexShrink: 0 },
+  diffCode: { flex: 1, paddingLeft: 2 },
+  openBtn: {
+    background: "transparent", border: "1px solid #33333d", color: C.dim,
+    borderRadius: 4, padding: "0 6px", cursor: "pointer", fontSize: 10, flexShrink: 0,
   },
   hash: { color: "#8b949e", fontFamily: "Menlo, monospace", flex: "0 0 auto" },
   subject: { color: C.fg, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },

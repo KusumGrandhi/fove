@@ -208,6 +208,116 @@ describe("history", () => {
     expect(merge!.parents.length).toBe(2);
   });
 
+  test("stash commits stay out of the graph", async () => {
+    // `--all` pulls in refs/stash, and each stash contributes up to three
+    // commits ("WIP on…", "index on…", "untracked files on…"). On a repo with
+    // dozens of stashes that buries the newest real work under bookkeeping.
+    await writeFile(join(dir, "a.txt"), "dirty\n");
+    await writeFile(join(dir, "untracked.txt"), "new\n");
+    await g.stashPush(dir, "wip", true);
+
+    const log = await g.log(dir, 50);
+    const subjects = log.map((c) => c.subject);
+    expect(subjects.some((s) => /^(WIP|index|untracked files) on/.test(s))).toBe(false);
+    // The real history is still there.
+    expect(subjects).toContain("first");
+  });
+
+  test("a detached HEAD still appears in the graph", async () => {
+    // Dropping `--all` for `--branches --remotes --tags` would lose the commit
+    // being sat on, which is reachable from no branch at all. Worktrees make
+    // this a real state, not a curiosity.
+    await git(dir, ["checkout", "-q", "--detach"]);
+    await writeFile(join(dir, "a.txt"), "detached\n");
+    await git(dir, ["commit", "-qam", "work while detached"]);
+
+    const log = await g.log(dir, 10);
+    expect(log.map((c) => c.subject)).toContain("work while detached");
+  });
+
+  test("commits are ordered topologically, not by date", async () => {
+    /*
+     * The readability fix. Git's default order is strict reverse-chronological,
+     * so branches worked on the same day interleave commit by commit and every
+     * lane in the drawn graph zigzags.
+     *
+     * Two branches are built with interleaved timestamps: side is committed
+     * *between* main's two commits. By date the order would alternate; by
+     * topology each branch stays contiguous.
+     */
+    const commitAt = async (msg: string, when: string, file: string) => {
+      await writeFile(join(dir, file), `${msg}\n`);
+      await git(dir, ["add", "-A"]);
+      await run("git", ["commit", "-qm", msg], {
+        cwd: dir,
+        env: { ...process.env, GIT_AUTHOR_DATE: when, GIT_COMMITTER_DATE: when },
+      });
+    };
+
+    await git(dir, ["checkout", "-q", "-b", "side"]);
+    await commitAt("side one", "2026-01-01T10:00:00", "s1.txt");
+    await commitAt("side two", "2026-01-01T12:00:00", "s2.txt");
+
+    await git(dir, ["checkout", "-q", "main"]);
+    // Timestamped between the two side commits, so date order interleaves.
+    await commitAt("main one", "2026-01-01T11:00:00", "m1.txt");
+    await commitAt("main two", "2026-01-01T13:00:00", "m2.txt");
+
+    const subjects = (await g.log(dir, 20)).map((c) => c.subject);
+    const at = (s: string) => subjects.indexOf(s);
+
+    // Each branch's own commits stay adjacent: no third branch's commit lands
+    // between them, which is exactly what makes a lane traceable.
+    expect(Math.abs(at("side one") - at("side two"))).toBe(1);
+    expect(Math.abs(at("main one") - at("main two"))).toBe(1);
+  });
+
+  test("branch scope excludes other branches entirely", async () => {
+    // The point of the branch view: on a repo where many branches are active,
+    // the full graph buries your own work dozens of rows down. This must show
+    // your line of history and nobody else's.
+    await git(dir, ["checkout", "-q", "-b", "other"]);
+    await writeFile(join(dir, "other.txt"), "theirs\n");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-qm", "someone else's work"]);
+
+    await git(dir, ["checkout", "-q", "main"]);
+    await writeFile(join(dir, "mine.txt"), "mine\n");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-qm", "my work"]);
+
+    const subjects = (await g.log(dir, 20, false)).map((c) => c.subject);
+    expect(subjects).toContain("my work");
+    expect(subjects).toContain("first");        // the trunk it branched from
+    expect(subjects).not.toContain("someone else's work");
+
+    // …and the full view still has both, so the toggle is a real choice.
+    const allSubjects = (await g.log(dir, 20, true)).map((c) => c.subject);
+    expect(allSubjects).toContain("someone else's work");
+  });
+
+  test("branch scope follows first parents through a merge", async () => {
+    // Without --first-parent a merge drags in every commit the merged branch
+    // carried, putting other people's work back into the view whose entire
+    // purpose is to exclude it.
+    await git(dir, ["checkout", "-q", "-b", "feature"]);
+    await writeFile(join(dir, "f.txt"), "f\n");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-qm", "feature detail one"]);
+    await writeFile(join(dir, "f2.txt"), "f2\n");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-qm", "feature detail two"]);
+
+    await git(dir, ["checkout", "-q", "main"]);
+    await git(dir, ["merge", "--no-ff", "-m", "merge feature", "feature"]);
+
+    const subjects = (await g.log(dir, 20, false)).map((c) => c.subject);
+    expect(subjects).toContain("merge feature");
+    // The merge appears as one row; its branch's internals do not.
+    expect(subjects).not.toContain("feature detail one");
+    expect(subjects).not.toContain("feature detail two");
+  });
+
   test("branches report which one is checked out", async () => {
     await git(dir, ["branch", "feature"]);
     const bs = await g.branches(dir);

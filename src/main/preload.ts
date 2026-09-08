@@ -35,6 +35,7 @@ const CH = {
   gitStashDrop: "git:stash-drop",
   gitStashList: "git:stash-list",
   gitCommits: "git:commits",
+  gitCommitParents: "git:commit-parents",
   gitBlame: "git:blame",
   gitBranches: "git:branches",
   openInEditor: "open:editor",
@@ -299,8 +300,10 @@ const api = {
   gitStashDrop: (cwd: string, ref?: string): Promise<unknown> =>
     ipcRenderer.invoke(CH.gitStashDrop, cwd, ref),
   gitStashList: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.gitStashList, cwd),
-  gitCommits: (cwd: string, limit?: number): Promise<unknown[]> =>
-    ipcRenderer.invoke(CH.gitCommits, cwd, limit),
+  gitCommits: (cwd: string, limit?: number, all?: boolean): Promise<unknown[]> =>
+    ipcRenderer.invoke(CH.gitCommits, cwd, limit, all),
+  gitCommitParents: (cwd: string, commit: string): Promise<number> =>
+    ipcRenderer.invoke(CH.gitCommitParents, cwd, commit),
   gitBlame: (cwd: string, path: string): Promise<unknown[]> =>
     ipcRenderer.invoke(CH.gitBlame, cwd, path),
   gitBranches: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.gitBranches, cwd),

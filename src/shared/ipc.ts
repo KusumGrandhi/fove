@@ -40,6 +40,7 @@ export const CH = {
   gitStashDrop: "git:stash-drop",
   gitStashList: "git:stash-list",
   gitCommits: "git:commits",
+  gitCommitParents: "git:commit-parents",
   gitBlame: "git:blame",
   gitBranches: "git:branches",
   openInEditor: "open:editor",
