@@ -244,15 +244,29 @@ export class KeelService {
     const full = path.startsWith("/") ? path : `${cwd}/${path}`;
     const contract = await fileContract(full, python);
 
-    // The best available purpose: the first docstring on the surface. Not a
-    // summary of the file, and the UI says so.
+    /*
+     * The best description available, and honesty about which one it is.
+     *
+     * A real docstring is what the author said this file is for. Everything
+     * else is us counting things and calling it a purpose, which reads as a
+     * description while telling you nothing -- so when there is no docstring
+     * the card says plainly that nobody wrote one, rather than dressing up
+     * a count.
+     *
+     * `purposeInferred` used to be hardcoded true, which tagged a genuine
+     * author's description as guesswork.
+     */
     const documented = contract.entries.find((e) => e.summary);
-    const purpose = documented?.summary
-      ?? (contract.entries.length > 0
-        ? `Exports ${contract.entries.length} name${contract.entries.length === 1 ? "" : "s"}. No description in the source.`
-        : "No exported surface and no description.");
-
-    return { contract, purpose, purposeInferred: true };
+    if (documented?.summary) {
+      return { contract, purpose: documented.summary, purposeInferred: false };
+    }
+    return {
+      contract,
+      purpose: contract.entries.length > 0
+        ? "Nobody has written down what this file is for."
+        : "Nothing else uses this file, and nobody has written down what it is for.",
+      purposeInferred: true,
+    };
   }
 
   /** The interpreter to extract Python contracts with, resolved once. */

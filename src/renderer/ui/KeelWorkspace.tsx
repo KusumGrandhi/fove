@@ -414,20 +414,25 @@ function FileCard(props: {
           <p style={S.purpose}>
             {card.purpose}
             {card.purposeInferred && (
-              // The handoff's "no intent" state, which is the honest default
-              // here rather than an edge case: nothing has written a purpose,
-              // so this is read from the source and labelled as such.
-              <span style={S.inferred}> · inferred from the source</span>
+              // "inferred from the source" described our method. What the
+              // reader needs to know is whether to trust the line above.
+              <span style={S.inferred}> · we guessed this</span>
             )}
           </p>
 
           <div style={S.twoCol}>
             <div>
-              <div style={S.colEyebrow}>CONTRACT — EXTRACTED, NOT WRITTEN</div>
+              {/*
+                * "CONTRACT — EXTRACTED, NOT WRITTEN" said how the list was
+                * made. The question a reader has is what the list is *for*.
+                */}
+              <div style={S.colEyebrow}>WHAT OTHER CODE USES</div>
               {card.contract.note ? (
                 <div style={{ ...TYPE.body115, color: STATE.warn }}>{card.contract.note}</div>
               ) : entries.length === 0 ? (
-                <div style={{ ...TYPE.body115, color: INK.i4 }}>nothing exported</div>
+                <div style={{ ...TYPE.body115, color: INK.i4 }}>
+                  Nothing — no other file can use this one.
+                </div>
               ) : (
                 <div style={S.sigList}>
                   {shown.map((e: ContractEntry) => (
@@ -445,7 +450,8 @@ function FileCard(props: {
             </div>
 
             <div>
-              <div style={S.colEyebrow}>INVARIANTS</div>
+              {/* "INVARIANTS" is a maths word for "rules". */}
+              <div style={S.colEyebrow}>RULES CHECKING THIS</div>
               {(props.drift?.length ?? 0) > 0 ? (
                 /*
                  * The evidence, not just the verdict.
@@ -457,16 +463,16 @@ function FileCard(props: {
                 (props.drift ?? []).map((d, i) => (
                   <div key={`${d.intentId}-${d.clause}-${i}`} style={S.driftBox}>
                     <div style={{ fontFamily: FONT.product, fontSize: 11, color: STATE.warn }}>
-                      breaks {d.intentId} · clause {d.clause}
-                      {d.confident === false && " — reviewer was not certain"}
+                      This breaks your rule: {d.intentId}
+                      {d.confident === false && " — but we are not sure"}
                     </div>
                     <div style={S.driftEvidence}>{d.evidence}</div>
                   </div>
                 ))
               ) : (
                 <div style={S.noIntent}>
-                  No intent covers this file, so nothing is checking it. Writing one is
-                  what turns this column from empty into the reason to trust a handoff.
+                  None. If something here is wrong, nothing will catch it — only
+                  you reading the change. Write a rule to change that.
                 </div>
               )}
             </div>
