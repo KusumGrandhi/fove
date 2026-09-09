@@ -40,9 +40,26 @@ export class GitService {
     }
   }
 
+  /**
+   * Repository status.
+   *
+   * `--untracked-files=all` is deliberate: git's default collapses a new
+   * directory into a single entry ending in `/`, so adding a folder of twelve
+   * files reads as "1 changed" and none of them can be staged individually.
+   * The cost is that git walks every untracked file, which `.gitignore`
+   * already bounds in practice.
+   */
   async status(cwd: string): Promise<RepoStatus | null> {
     try {
-      return parseStatus(await git(cwd, ["status", "--porcelain=v2", "--branch", "-z"]));
+      return parseStatus(
+        await git(cwd, [
+          "status",
+          "--porcelain=v2",
+          "--branch",
+          "-z",
+          "--untracked-files=all",
+        ]),
+      );
     } catch {
       return null;
     }
