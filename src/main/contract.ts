@@ -146,11 +146,23 @@ async function extractPython(
 /**
  * Top-level exported declarations in a TypeScript or JavaScript file.
  *
- * A regex rather than a real parser, and the limitation is deliberate: this
- * reads *fove's own* source, where exports are one per line and conventional.
- * It is not trying to be a TypeScript compiler -- if it misses something the
- * card shows fewer entries, which is a smaller failure than pulling in a second
- * toolchain to be exhaustive about a case that barely arises.
+ * A regex rather than a real parser: this reads one line at a time and does
+ * not try to be a TypeScript compiler. Missing something shows fewer entries,
+ * which is a smaller failure than pulling in a second toolchain.
+ *
+ * But *silently* showing none is not a small failure -- it reads as "this file
+ * exports nothing", which is a claim, and a false one. The first version was
+ * written against fove's own source and missed two shapes that dominate real
+ * codebases: measured on `core`'s frontend, **770 of 1777 files** use
+ * `export default` and rendered as "nothing exported".
+ *
+ * So the patterns cover what people actually write, not what this project
+ * happens to:
+ *
+ *   - `export default Foo` and `export default function/class`
+ *   - `export const Foo = ...` at any casing -- the original required
+ *     SCREAMING_CASE, which excluded every React component
+ *   - `export { a, b }` re-export lists
  */
 function extractTypeScript(source: string): ContractEntry[] {
   const entries: ContractEntry[] = [];
@@ -159,12 +171,56 @@ function extractTypeScript(source: string): ContractEntry[] {
   const patterns: [RegExp, ContractEntry["kind"]][] = [
     [/^export\s+(?:async\s+)?function\s+(\w+)\s*(\([^)]*\)[^{]*)/, "function"],
     [/^export\s+(?:abstract\s+)?class\s+(\w+)([^{]*)/, "class"],
-    [/^export\s+(?:interface|type)\s+(\w+)/, "class"],
-    [/^export\s+const\s+([A-Z_][A-Z0-9_]*)\s*[:=]/, "constant"],
+    [/^export\s+(?:interface|type|enum)\s+(\w+)/, "class"],
+    // `export default function Foo()` / `export default class Foo`, then the
+    // bare `export default Foo` that a component file ends with.
+    // The parameter list may not close on this line -- `({` opening a
+    // destructured props object is how most components are written -- so the
+    // signature capture is optional here.
+    [/^export\s+default\s+(?:async\s+)?function\s+(\w+)\s*(\([^)]*\)[^{]*)?/, "function"],
+    [/^export\s+default\s+(?:abstract\s+)?class\s+(\w+)([^{]*)/, "class"],
+    // `export default forwardRef<...>(function Foo(` and friends: the name
+    // worth showing is the inner function's, not the wrapper's.
+    [/^export\s+default\s+\w+(?:<[^>]*>)?\(\s*(?:async\s+)?function\s+(\w+)/, "function"],
+    // `export default slice.reducer` -- a member expression, named by its tail.
+    [/^export\s+default\s+\w+\.(\w+)\s*;?\s*$/, "constant"],
+    // `export default memo(Foo)` / `React.memo(Foo)` -- a wrapper around a
+    // component declared above. The wrapped name is the export's identity.
+    [/^export\s+default\s+(?:\w+\.)?\w+\(\s*(\w+)\s*\)\s*;?\s*$/, "constant"],
+    [/^export\s+default\s+(\w+)\s*;?\s*$/, "constant"],
+    // Any exported const, not only SCREAMING_CASE: a React component, a hook
+    // and an arrow function are all written this way.
+    [/^export\s+const\s+(\w+)\s*[:=]/, "constant"],
+    // `export const { a, b } = slice.actions` -- destructured, several names.
+    // Handled below with the re-export lists, which share the shape.
+    [/^export\s+(?:let|var)\s+(\w+)\s*[:=]/, "constant"],
   ];
 
   lines.forEach((raw, i) => {
     const line = raw.trimEnd();
+
+    /*
+     * `export { a, b as c }` -- a re-export list, which is the whole public
+     * surface of a barrel file. One line, several names, so it cannot be one
+     * of the single-capture patterns above.
+     *
+     * `export type { ... }` is skipped: it re-exports types that are already
+     * declared somewhere the extractor will find them.
+     */
+    const list = /^export\s+(?:const\s+)?\{([^}]*)\}/.exec(line);
+    if (list && !/^export\s+type\s/.test(line)) {
+      for (const part of list[1]!.split(",")) {
+        // `a as b` exports under the second name.
+        const name = part.trim().split(/\s+as\s+/).pop()?.trim();
+        // `export { default } from "./X"` is a barrel re-export: the name is
+        // literally `default`, and saying so beats reporting nothing.
+        if (name && /^\w+$/.test(name)) {
+          entries.push({ kind: "constant", name, signature: name, line: i + 1 });
+        }
+      }
+      return;
+    }
+
     for (const [re, kind] of patterns) {
       const m = re.exec(line);
       if (!m) continue;
@@ -177,6 +233,25 @@ function extractTypeScript(source: string): ContractEntry[] {
       break;
     }
   });
+
+  /*
+   * A default export whose name is only on the *next* line.
+   *
+   * `export default forwardRef<Props>(\n  function Foo(` is common enough in
+   * this codebase to matter, and a line-at-a-time reader cannot see it. Rather
+   * than grow into a parser, record that the file has a default export and let
+   * the card say so -- "exports a component" is worth far more than the
+   * "nothing exported" this used to claim.
+   */
+  if (entries.length === 0 && /^export\s+default\b/m.test(source)) {
+    const line = lines.findIndex((l) => /^export\s+default\b/.test(l)) + 1;
+    entries.push({
+      kind: "constant",
+      name: "default",
+      signature: "default export",
+      line: line > 0 ? line : 1,
+    });
+  }
 
   return entries;
 }

@@ -176,3 +176,91 @@ describe("degradation", () => {
     expect(c.note).toBeUndefined();
   });
 });
+
+describe("export shapes real codebases actually use", () => {
+  /*
+   * The first version of this extractor was written against fove's own source
+   * and silently reported "nothing exported" for anything else. Measured on
+   * `core`'s frontend: 770 of 1777 files use `export default`, and every one
+   * of them rendered as having no public surface.
+   *
+   * That is not a small failure. A contract card saying "nothing exported" is
+   * a claim, and a false claim is worse than an incomplete one -- the whole
+   * point of the card is that you can trust it while approving a handoff.
+   */
+  /** A fresh filename per case, so nothing is read from a stale fixture. */
+  let n = 0;
+  const surface = async (source: string): Promise<string[]> => {
+    const f = join(dir, `s${n++}.tsx`);
+    await writeFile(f, source);
+    return (await fileContract(f)).entries.map((e) => e.name);
+  };
+
+  it("finds a bare default export", async () => {
+    // The exact shape of the file that exposed this.
+    expect(await surface("const Foo = () => null;\nexport default Foo;\n"))
+      .toContain("Foo");
+  });
+
+  it("finds a default-exported function with destructured props", async () => {
+    // The parameter list does not close on the same line, which is how most
+    // React components are written.
+    expect(await surface("export default function MenuPopover({\n  a,\n}) {}\n"))
+      .toContain("MenuPopover");
+  });
+
+  it("finds a lower-case exported const", async () => {
+    // The original pattern required SCREAMING_CASE, which excluded every
+    // component, hook and arrow function.
+    expect(await surface("export const useThing = () => 1;\n"))
+      .toContain("useThing");
+  });
+
+  it("names the inner function of a forwardRef wrapper", async () => {
+    expect(await surface(
+      "export default forwardRef<HTMLDivElement, P>(function Card(props, ref) {})\n",
+    )).toContain("Card");
+  });
+
+  it("names the component inside memo()", async () => {
+    expect(await surface("const Icon = () => null;\nexport default memo(Icon);\n"))
+      .toContain("Icon");
+  });
+
+  it("names a member-expression default by its tail", async () => {
+    expect(await surface("export default slice.reducer;\n")).toContain("reducer");
+  });
+
+  it("lists every name in a re-export", async () => {
+    const names = await surface('export { setLoading, setEnvironment as setEnv };\n');
+    expect(names).toContain("setLoading");
+    // `a as b` exports under the second name.
+    expect(names).toContain("setEnv");
+  });
+
+  it("lists names destructured out of an exported const", async () => {
+    expect(await surface("export const { setA, setB } = slice.actions;\n"))
+      .toEqual(expect.arrayContaining(["setA", "setB"]));
+  });
+
+  it("finds an exported enum", async () => {
+    expect(await surface("export enum Status { OK = 'ok' }\n")).toContain("Status");
+  });
+
+  it("still reports a default export it cannot name", async () => {
+    /*
+     * `export default forwardRef<P>(` with the function on the next line is
+     * beyond a line-at-a-time reader. Saying "default export" is worth far
+     * more than claiming the file exports nothing.
+     */
+    const names = await surface(
+      "export default forwardRef<HTMLDivElement, P>(\n  (props, ref) => null,\n);\n",
+    );
+    expect(names).toEqual(["default"]);
+  });
+
+  it("reports nothing for a file that genuinely exports nothing", async () => {
+    // The claim must still be available when it is true.
+    expect(await surface("const private1 = 1;\nconsole.log(private1);\n")).toEqual([]);
+  });
+});
