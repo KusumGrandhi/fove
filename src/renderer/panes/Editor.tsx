@@ -194,6 +194,15 @@ export function EditorPane(props: {
   onToggleBreakpoint?: (path: string, line: number) => void;
   /** Where execution is currently paused, highlighted like a breakpoint's target. */
   pausedAt?: { path: string; line: number } | null;
+  /**
+   * Report the file actually on screen, so the layout knows it.
+   *
+   * `initialPath` only says what the pane was *asked* to open. Opening a file
+   * from the tree changes this pane's state and nothing else, so without this
+   * the persisted layout keeps whatever was last requested through the palette
+   * -- and popping the pane out reopens that stale file, or none at all.
+   */
+  onActivePathChange?: (path: string | null) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -228,6 +237,19 @@ export function EditorPane(props: {
   const [treeError, setTreeError] = useState<string | null>(null);
 
   const active = files.find((f) => f.path === activePath) ?? null;
+
+  /*
+   * Tell the app which file is on screen.
+   *
+   * Held in a ref rather than listed as a dependency: the callback is a fresh
+   * closure on every parent render, so depending on it directly would fire
+   * this effect continuously instead of only when the file actually changes.
+   */
+  const onActivePathChangeRef = useRef(props.onActivePathChange);
+  onActivePathChangeRef.current = props.onActivePathChange;
+  useEffect(() => {
+    onActivePathChangeRef.current?.(activePath);
+  }, [activePath]);
 
   // ---- file tree ----------------------------------------------------------
   const listDir = useCallback(async (d: string) => {

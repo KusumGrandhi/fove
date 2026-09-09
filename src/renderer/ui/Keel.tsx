@@ -409,6 +409,10 @@ const S: Record<string, React.CSSProperties> = {
   kbd: { color: INK.i5, marginLeft: 5, fontSize: 10 },
 
   body: {
+    // flex:1 + minHeight:0 are what make this actually scroll: the card is a
+    // flex column with overflow:hidden, so without them the body grows past
+    // the card and the overflow is clipped away rather than scrolled to.
+    flex: 1, minHeight: 0,
     overflowY: "auto", padding: "18px 20px 20px",
     display: "flex", flexDirection: "column", gap: 16,
   },

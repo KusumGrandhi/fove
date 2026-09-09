@@ -67,6 +67,8 @@ export function LayoutMenu(props: {
 }) {
   const [open, setOpen] = useState(false);
   const hostRef = useRef<HTMLDivElement>(null);
+  /** Where to pin the fixed-position menu, measured from the button. */
+  const [at, setAt] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
 
   // Dismiss on an outside click or Escape, like every other menu on the system.
   useEffect(() => {
@@ -90,7 +92,13 @@ export function LayoutMenu(props: {
   return (
     <div ref={hostRef} style={{ position: "relative", WebkitAppRegion: "no-drag" } as CSSProperties}>
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={(e) => {
+          // Measure at open time: the toolbar may have been scrolled, so the
+          // button's viewport position is not fixed.
+          const r = e.currentTarget.getBoundingClientRect();
+          setAt({ top: r.bottom + 4, left: r.left });
+          setOpen((v) => !v);
+        }}
         title="Starting layout for this workspace"
         style={{ ...btn, color: open ? C.fg : C.dim, background: open ? C.chromeHi : "transparent" }}
         onMouseEnter={(e) => { e.currentTarget.style.background = C.chromeHi; }}
@@ -104,7 +112,7 @@ export function LayoutMenu(props: {
       </button>
 
       {open && (
-        <div style={menu}>
+        <div style={{ ...menu, top: at.top, left: at.left }}>
           {props.presets.map((p) => (
             <button
               key={p.id}
@@ -144,15 +152,25 @@ const btn: CSSProperties = {
   fontSize: 12,
   lineHeight: "16px",
   whiteSpace: "nowrap",
+  // Keeps its width so an over-wide toolbar scrolls instead of compressing
+  // every button until the labels are unreadable.
+  flexShrink: 0,
   transition: "background 90ms, color 90ms",
   // Buttons must stay clickable inside the draggable title bar.
   WebkitAppRegion: "no-drag",
 } as CSSProperties;
 
+/*
+ * `fixed`, not `absolute`.
+ *
+ * The toolbar scrolls horizontally now that it can be wider than the window,
+ * and a scroll container clips absolutely-positioned descendants -- which cut
+ * the preset menu off at the toolbar's 39px height. Fixed positioning takes
+ * the menu out of that box; `top`/`left` are set from the button's measured
+ * rect when it opens.
+ */
 const menu: CSSProperties = {
-  position: "absolute",
-  top: "calc(100% + 4px)",
-  left: 0,
+  position: "fixed",
   zIndex: 80,
   minWidth: 268,
   background: C.panel,

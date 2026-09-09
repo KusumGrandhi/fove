@@ -219,7 +219,8 @@ const S: Record<string, React.CSSProperties> = {
     borderRadius: 4, padding: "1px 8px", cursor: "pointer", fontSize: 10,
   },
   body: {
-    flex: 1, margin: 0, padding: "7px 9px", overflowY: "auto",
+    // minHeight:0 or a long transcript grows the box instead of scrolling it.
+    flex: 1, minHeight: 0, margin: 0, padding: "7px 9px", overflowY: "auto",
     fontFamily: 'Menlo, "SF Mono", monospace', fontSize: 11, lineHeight: "15px",
     color: C.dim, whiteSpace: "pre-wrap", wordBreak: "break-word",
   },

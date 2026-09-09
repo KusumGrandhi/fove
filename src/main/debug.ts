@@ -195,7 +195,23 @@ export class DebugSession {
     });
     child.stdout?.on("data", (b: Buffer) => this.onOutput(b.toString("utf8"), "stdout"));
     child.on("exit", (code) => {
-      this.setStatus({ state: "terminated", error: code ? `exited with code ${code}` : undefined });
+      /*
+       * Name the program's own failure, not just the exit code.
+       *
+       * A target that raises on import exits non-zero before debugpy ever
+       * attaches, and "exited with code 1" makes that look like the debugger
+       * broke. The last non-empty stderr line is the exception itself, which
+       * is the part that says whose fault it is.
+       */
+      const lastLine = stderr.trim().split("\n").filter(Boolean).pop();
+      this.setStatus({
+        state: "terminated",
+        error: code
+          ? lastLine
+            ? `exited with code ${code} · ${lastLine.slice(0, 200)}`
+            : `exited with code ${code}`
+          : undefined,
+      });
       this.cleanup();
     });
 

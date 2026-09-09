@@ -280,7 +280,7 @@ const S: Record<string, React.CSSProperties> = {
          background: "#14141a", borderBottom: `1px solid ${C.line}`, flexShrink: 0 },
   meta: { color: C.faint, fontSize: 10 },
   body: { display: "flex", flex: 1, minHeight: 0 },
-  list: { flex: 1, minWidth: 0, overflowY: "auto", padding: "3px 0" },
+  list: { flex: 1, minWidth: 0, minHeight: 0, overflowY: "auto", padding: "3px 0" },
   row: { display: "flex", gap: 6, alignItems: "center", padding: "2px 8px",
          cursor: "pointer", lineHeight: "19px" },
   name: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },

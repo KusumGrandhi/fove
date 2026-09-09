@@ -331,7 +331,7 @@ const S: Record<string, React.CSSProperties> = {
     padding: "3vh 2vw", zIndex: 50, animation: "fove-fade-in 120ms ease-out",
   },
   shell: {
-    width: "min(1320px, 100%)", height: "100%", minHeight: 640,
+    width: "min(1320px, 100%)", height: "100%", minHeight: 0,
     display: "flex", flexDirection: "column",
     background: SURFACE.s0, border: `1px solid ${BORDER.b2}`, borderRadius: RADIUS.card,
     overflow: "hidden", boxShadow: "0 24px 64px rgba(0,0,0,.55)",
@@ -431,7 +431,10 @@ const S: Record<string, React.CSSProperties> = {
 
   rail: {
     borderLeft: `1px solid ${BORDER.b1}`, background: SURFACE.s2,
-    padding: "15px 16px", display: "flex", flexDirection: "column", minHeight: 0,
+    padding: "15px 16px", display: "flex", flexDirection: "column",
+    // The rail holds risks and checks, as long as the agent made them.
+    // Without a scroll of its own the tail is simply unreachable.
+    minHeight: 0, overflowY: "auto",
   },
   railGap: {
     ...TYPE.body115, color: INK.i4, padding: "10px 11px", borderRadius: 7,

@@ -20,14 +20,34 @@ import { spawn, type ChildProcess } from "node:child_process";
 /** Never return an unbounded result set: the UI cannot use 200k rows. */
 const MAX_MATCHES = 2000;
 
+/**
+ * Filename hits are a shortlist, not a listing.
+ *
+ * A one-letter query matches almost every path in a repository, and burying
+ * the content results under thousands of them would be worse than not
+ * searching paths at all.
+ */
+const PATH_MATCH_CAP = 50;
+
 export interface SearchMatch {
   path: string;
+  /** 0 for a filename match, which has no line to point at. */
   line: number;
   /** The matching line, trimmed of its trailing newline. */
   text: string;
   /** Byte offsets of the match within `text`, for highlighting. */
   start: number;
   end: number;
+  /**
+   * True when the query matched the *path* rather than the file's contents.
+   *
+   * Searching for `AGENTS.md` should find the file called that, not only the
+   * places that mention it. Without this the pane answers a question the user
+   * did not ask and reports "no matches" while the file sits in the tree.
+   */
+  isPath?: boolean;
+  /** A path hit that matched as a substring, rather than a subsequence. */
+  exact?: boolean;
 }
 
 export interface SearchQuery {
@@ -52,11 +72,59 @@ interface RgEvent {
   };
 }
 
-/** A path is `text` for UTF-8, or base64 `bytes` when it is not. */
+/**
+ * A path is `text` for UTF-8, or base64 `bytes` when it is not.
+ *
+ * The leading `./` is stripped. rg echoes back the search root it was given,
+ * so a content hit arrives as `./readme.md` while `rg --files` reports
+ * `readme.md` for the same file -- and without normalising, the two disagree:
+ * results group under two headings and an opened path becomes `cwd/./file`.
+ */
 function pathOf(p?: { text?: string; bytes?: string }): string {
-  if (p?.text) return p.text;
-  if (p?.bytes) return Buffer.from(p.bytes, "base64").toString("utf8");
-  return "";
+  const raw = p?.text ?? (p?.bytes ? Buffer.from(p.bytes, "base64").toString("utf8") : "");
+  return raw.startsWith("./") ? raw.slice(2) : raw;
+}
+
+/**
+ * How a query matches a file path.
+ *
+ * A plain substring test is not enough for the case this feature exists to
+ * fix: typing `agent.md` should find `AGENTS.md`, and "agent.md" is not a
+ * substring of it -- the `S` and the case both intervene. So a substring hit
+ * is preferred, and a *subsequence* of the basename is accepted as a
+ * fallback, which is how every editor's file-finder behaves.
+ *
+ * The subsequence is deliberately limited to the basename. Allowing it across
+ * the whole path would let `a/b` match almost anything, since the letters are
+ * scattered through every directory name.
+ *
+ * Returns the highlight range within the full path, or null for no match.
+ */
+function pathMatcher(
+  needle: string,
+  caseSensitive: boolean,
+): (path: string) => { start: number; end: number; exact: boolean } | null {
+  return (path: string) => {
+    const hay = caseSensitive ? path : path.toLowerCase();
+
+    const direct = hay.indexOf(needle);
+    if (direct >= 0) return { start: direct, end: direct + needle.length, exact: true };
+
+    // Fall back to a subsequence over the basename only.
+    const slash = hay.lastIndexOf("/");
+    const base = hay.slice(slash + 1);
+    let i = 0;
+    let first = -1;
+    let last = -1;
+    for (let j = 0; j < base.length && i < needle.length; j++) {
+      if (base[j] !== needle[i]) continue;
+      if (first < 0) first = j;
+      last = j;
+      i++;
+    }
+    if (i < needle.length) return null;
+    return { start: slash + 1 + first, end: slash + 1 + last + 1, exact: false };
+  };
 }
 
 export class SearchService {
@@ -102,7 +170,87 @@ export class SearchService {
       this.onDone(id, 0, false);
       return;
     }
+    // Filenames first: they are usually what a bare word like "AGENTS.md"
+    // means, and they finish fast enough to appear before the content hits.
+    this.searchPaths(id, q, (pathCount) => this.searchContents(id, q, pathCount));
+  }
 
+  /**
+   * Match the query against file *paths*, via `rg --files`.
+   *
+   * Separate from the content search rather than folded into it: `rg` has no
+   * single invocation that reports both, and a path hit has no line number,
+   * so it is a different kind of result rather than a variation on one.
+   */
+  private searchPaths(id: string, q: SearchQuery, done: (count: number) => void): void {
+    const args = ["--files"];
+    for (const glob of q.globs ?? []) args.push("--glob", glob);
+
+    const child = spawn("rg", args, { cwd: q.cwd });
+    this.running.set(id, child);
+
+    const needle = q.caseSensitive ? q.query : q.query.toLowerCase();
+    const match = pathMatcher(needle, q.caseSensitive === true);
+    let buffer = "";
+    let found = 0;
+    let batch: SearchMatch[] = [];
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString("utf8");
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const path of lines) {
+        if (!path || found >= PATH_MATCH_CAP) continue;
+        const hit = match(path);
+        if (!hit) continue;
+        found++;
+        batch.push({
+          path, line: 0, text: path, start: hit.start, end: hit.end,
+          isPath: true, exact: hit.exact,
+        });
+      }
+      // Held until the end rather than streamed: ordering exact hits above
+      // fuzzy ones needs the whole set, and `rg --files` finishes fast enough
+      // that nothing is gained by emitting them piecemeal.
+    });
+
+    // `error` and `close` can both fire for one failed spawn, and running the
+    // content pass twice would double every content match.
+    let finished = false;
+    const finish = (): void => {
+      if (finished) return;
+      finished = true;
+      if (this.running.get(id) !== child) return; // superseded
+      // Whatever is left in `buffer` is the last path, unterminated by a
+      // newline. Dropping it would silently lose one result.
+      const tail = buffer.trim();
+      if (tail && found < PATH_MATCH_CAP) {
+        const hit = match(tail);
+        if (hit) {
+          found++;
+          batch.push({
+            path: tail, line: 0, text: tail,
+            start: hit.start, end: hit.end, isPath: true,
+          });
+        }
+      }
+      if (batch.length > 0) {
+        // An exact substring hit is what the user typed; a subsequence hit is
+        // a guess. Showing the guess first would bury the obvious answer.
+        batch.sort((a, b) => Number(b.exact ?? false) - Number(a.exact ?? false));
+        this.onMatch(id, batch);
+        batch = [];
+      }
+      this.running.delete(id);
+      done(found);
+    };
+    // A missing `rg` is reported once, by the content pass.
+    child.on("error", finish);
+    child.on("close", finish);
+  }
+
+  /** Match the query against file contents. */
+  private searchContents(id: string, q: SearchQuery, priorCount: number): void {
     const args = ["--json", "--line-number", "--max-count", "200"];
     if (!q.regex) args.push("--fixed-strings");
     args.push(q.caseSensitive ? "--case-sensitive" : "--ignore-case");
@@ -114,7 +262,7 @@ export class SearchService {
     const child = spawn("rg", args, { cwd: q.cwd });
     this.running.set(id, child);
 
-    let count = 0;
+    let count = priorCount;
     let truncated = false;
     let buffer = "";
     let batch: SearchMatch[] = [];

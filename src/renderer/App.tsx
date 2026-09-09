@@ -28,7 +28,9 @@ import { KeelIntents, type IntentsWire } from "./ui/KeelIntents.js";
 import { initial as initialHandoff, type HandoffState } from "../shared/handoff.js";
 import type { WorktreeStatus } from "../main/worktrees.js";
 import { THEMES, DEFAULT_THEME, applyTheme } from "./ui/themes.js";
-import { close as closeTab, insert as insertTab, setPinned } from "../shared/tabs.js";
+import {
+  close as closeTab, insert as insertTab, noteEditorPath as applyEditorPath, setPinned,
+} from "../shared/tabs.js";
 import {
   closePane, closePaneChecked, isValid, leaf, newId, paneIds, prunePins, setPanePinned,
   split, type Dir, type Node, type Pins,
@@ -520,6 +522,23 @@ export function App() {
    */
   /** See openPaletteRef: an effect above needs this before it is declared. */
   const openInPaneRef = useRef<(file: string, line?: number) => void>(() => {});
+
+  /**
+   * Record which file an editor pane is actually showing.
+   *
+   * The layout is what a popped-out window reads to rebuild the pane, so it
+   * has to follow the editor rather than only the requests made *of* it --
+   * opening a file from the editor's own tree is invisible to `openInPane`.
+   *
+   * `openNonce` is deliberately left alone: bumping it here would feed a
+   * reopen back into the pane that just reported the change.
+   */
+  const noteEditorPath = useCallback(
+    (paneId: string, path: string | null) => {
+      setTabs((prev) => applyEditorPath(prev, paneId, path));
+    },
+    [],
+  );
 
   const openInPane = useCallback(
     (file: string, line?: number) => {
@@ -1140,6 +1159,10 @@ export function App() {
                         breakpoints={breakpoints}
                         onToggleBreakpoint={toggleBreakpoint}
                         pausedAt={pausedAt}
+                        // Record the file the pane is really showing, so the
+                        // persisted layout matches the screen and popping the
+                        // pane out reopens what you were looking at.
+                        onActivePathChange={(p) => noteEditorPath(spec.id, p)}
                       />
                     ) : spec.kind === "agents" ? (
                       <AgentsPane cwd={spec.cwd ?? cwdOf(active)} onOpen={openInPane} />
@@ -1238,12 +1261,28 @@ const S: Record<string, React.CSSProperties> = {
     WebkitAppRegion: "drag",
   } as React.CSSProperties,
   appName: { color: C.faint, fontSize: 11, letterSpacing: 0.3 },
-  tabs: { display: "flex", alignItems: "center", gap: 3 },
+  tabs: {
+    display: "flex", alignItems: "center", gap: 3,
+    /*
+     * Scrolls rather than clipping.
+     *
+     * Workspace tabs carry a branch name, so a handful of them overflow a
+     * 1440px window -- measured at 567px past the edge with five open. Without
+     * this the tabs past the fold are simply unreachable: no scrollbar, no
+     * indication they exist.
+     */
+    minWidth: 0, overflowX: "auto", overflowY: "hidden",
+    scrollbarWidth: "none",
+    WebkitAppRegion: "no-drag",
+  } as React.CSSProperties,
   tab: {
     display: "flex", alignItems: "center",
     padding: "4px 12px", borderRadius: 6, border: "1px solid transparent",
     background: "transparent", color: C.faint, cursor: "pointer", fontSize: 12,
     userSelect: "none",
+    // Keeps its full width so the strip scrolls; without this the tabs
+    // squash into each other and the labels become unreadable instead.
+    flexShrink: 0, whiteSpace: "nowrap",
     WebkitAppRegion: "no-drag",
   } as React.CSSProperties,
   tabActive: { background: C.chromeHi, color: C.fg, border: `1px solid ${C.accent}` },
@@ -1269,6 +1308,16 @@ const S: Record<string, React.CSSProperties> = {
     display: "flex", alignItems: "center", gap: 2,
     padding: "5px 10px", background: C.chrome,
     borderBottom: `1px solid ${C.line}`, flexShrink: 0,
+    /*
+     * Scrolls rather than running off the window.
+     *
+     * Measured at 2007px of buttons in a 1440px window: everything from
+     * "Config" rightwards was unreachable, with nothing on screen to say it
+     * was there. The app root is `overflow: hidden`, so an over-wide row here
+     * is clipped by the window rather than scrolled to.
+     */
+    minWidth: 0, overflowX: "auto", overflowY: "hidden",
+    scrollbarWidth: "none",
   },
 
   // The stage insets the panes so they read as content inside the app.

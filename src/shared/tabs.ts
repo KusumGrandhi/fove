@@ -80,3 +80,49 @@ export function moveTab<T extends Pinnable>(tabs: T[], id: string, to: number): 
 export function close<T extends Pinnable>(tabs: T[], id: string): T[] {
   return tabs.filter((t) => t.id !== id);
 }
+
+/** The parts of a pane this module needs; the app's Pane is a superset. */
+export interface EditorPaneish {
+  kind: string;
+  openPath?: string;
+}
+
+/** The parts of a tab this module needs. */
+export interface PaneHolder<P> {
+  panes: Record<string, P>;
+}
+
+/**
+ * Record the file an editor pane is actually showing.
+ *
+ * The persisted layout is what a popped-out window reads to rebuild a pane,
+ * so it has to follow the editor rather than only the requests made *of* it.
+ * Opening a file from the editor's own tree is invisible to the palette route
+ * that used to be the sole writer of `openPath` -- which is why popping a pane
+ * out reopened a stale file, or none at all.
+ *
+ * Returns the same array, and the same tab objects, when nothing changed: the
+ * pane reports its path on mount with the file it was just told to open, and
+ * persisting that would re-render, which would report again.
+ */
+export function noteEditorPath<P extends EditorPaneish, T extends PaneHolder<P>>(
+  tabs: T[],
+  paneId: string,
+  path: string | null,
+): T[] {
+  const next = path ?? undefined;
+  let changed = false;
+  const out = tabs.map((t) => {
+    const pane = t.panes[paneId];
+    // Located by pane id across every tab rather than assuming the active
+    // one: a background tab's editor still reports, and writing its path into
+    // the wrong tab would corrupt both.
+    if (!pane || pane.kind !== "editor") return t;
+    if (pane.openPath === next) return t;
+    changed = true;
+    // `openNonce` is deliberately untouched: bumping it would feed a reopen
+    // back into the pane that just reported the change.
+    return { ...t, panes: { ...t.panes, [paneId]: { ...pane, openPath: next } } };
+  });
+  return changed ? out : tabs;
+}

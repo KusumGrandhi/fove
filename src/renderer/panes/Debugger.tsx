@@ -161,8 +161,20 @@ export function DebuggerPane(props: {
         <Step label="step out" glyph="↥" on={paused} onClick={() => window.th.dbgStepOut()} />
         <Step label="pause" glyph="❙❙" on={status.state === "running"} onClick={() => window.th.dbgPause()} />
         <div style={{ flex: 1 }} />
-        <span style={{ ...S.state, color: paused ? C.yellow : running ? C.green : C.faint }}>
-          {status.state}{status.reason ? ` · ${status.reason}` : ""}
+        <span
+          style={{
+            ...S.state,
+            color: paused ? C.yellow : running ? C.green : status.error ? C.red : C.faint,
+          }}
+          // The full reason, for the cases too long to sit in the bar.
+          title={status.error ?? status.reason ?? status.state}
+        >
+          {status.state}
+          {status.reason ? ` · ${status.reason}` : ""}
+          {/* Without this the pane says a bare "terminated" and the actual
+              cause -- a non-zero exit, a missing debugpy -- is invisible, so
+              the program's own crash reads as a broken debugger. */}
+          {status.error ? ` · ${status.error}` : ""}
         </span>
       </div>
 
@@ -260,10 +272,17 @@ const S: Record<string, React.CSSProperties> = {
   bar: {
     display: "flex", alignItems: "center", gap: 5, padding: "5px 8px",
     borderBottom: `1px solid ${C.line}`, flexShrink: 0,
+    // Two selects and a start button do not fit a narrow pane. Wrapping keeps
+    // the start button reachable; clipping would put it past the edge with
+    // nothing to scroll, which is what a 222px-wide pane did.
+    flexWrap: "wrap", rowGap: 4, minWidth: 0,
   },
   select: {
     background: C.bg, color: C.fg, border: `1px solid ${C.line}`, borderRadius: 4,
     padding: "2px 5px", fontSize: 11, maxWidth: 190, fontFamily: "inherit",
+    // May shrink below its content: the label truncates, which is far better
+    // than pushing the start button out of the pane.
+    minWidth: 0, flexShrink: 1,
   },
   go: {
     padding: "2px 10px", borderRadius: 4, border: `1px solid ${C.green}`,
@@ -292,7 +311,12 @@ const S: Record<string, React.CSSProperties> = {
   },
   state: { fontSize: 10, fontFamily: "Menlo, monospace" },
   body: { flex: 1, display: "flex", minHeight: 0 },
-  col: { flex: 1, overflow: "auto", minWidth: 0, borderRight: `1px solid ${C.line}` },
+  // minHeight:0 as well as minWidth:0: a deep call stack is taller than the
+  // pane, and without it the column grows instead of scrolling.
+  col: {
+    flex: 1, overflow: "auto", minWidth: 0, minHeight: 0,
+    borderRight: `1px solid ${C.line}`,
+  },
   head: {
     padding: "4px 9px", color: C.faint, fontSize: 10, textTransform: "uppercase",
     letterSpacing: 0.4, position: "sticky", top: 0, background: C.panel,

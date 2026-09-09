@@ -16,10 +16,13 @@ import { C } from "../ui/Chrome.js";
 
 interface Match {
   path: string;
+  /** 0 for a filename match, which has no line to point at. */
   line: number;
   text: string;
   start: number;
   end: number;
+  /** The query matched the path rather than the contents. */
+  isPath?: boolean;
 }
 
 /** Long enough to skip intermediate keystrokes, short enough to feel direct. */
@@ -51,7 +54,7 @@ export function SearchPane(props: {
       setSearching(false);
       setStatus(
         count === 0
-          ? "no matches"
+          ? noMatchHint(queryRef.current, regexRef.current)
           : `${count} match${count === 1 ? "" : "es"}${truncated ? " (stopped at the cap)" : ""}`,
       );
     });
@@ -60,6 +63,13 @@ export function SearchPane(props: {
 
   // Cancel on unmount, so closing the pane stops the process.
   useEffect(() => () => window.th.searchCancel(id), [id]);
+
+  // The done-handler is registered once, so it reads these through refs
+  // rather than closing over the first render's values.
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  const regexRef = useRef(regex);
+  regexRef.current = regex;
 
   const run = useCallback(
     (q: string) => {
@@ -102,10 +112,14 @@ export function SearchPane(props: {
     // Options are included so toggling one re-runs the current query.
   }, [query, regex, caseSensitive, wholeWord, glob]);
 
-  /** Group by file, preserving the order results arrived in. */
+  /** Filename hits, listed on their own above the content results. */
+  const fileHits = useMemo(() => matches.filter((m) => m.isPath), [matches]);
+
+  /** Group content matches by file, preserving the order results arrived in. */
   const grouped = useMemo(() => {
     const byFile = new Map<string, Match[]>();
     for (const m of matches) {
+      if (m.isPath) continue;
       const list = byFile.get(m.path);
       if (list) list.push(m);
       else byFile.set(m.path, [m]);
@@ -152,6 +166,31 @@ export function SearchPane(props: {
       )}
 
       <div style={S.results}>
+        {fileHits.length > 0 && (
+          <div>
+            <div style={S.section}>
+              FILES
+              <span style={{ color: C.faint, marginLeft: 6 }}>{fileHits.length}</span>
+            </div>
+            {fileHits.map((m) => (
+              <div
+                key={`path-${m.path}`}
+                style={S.hit}
+                title={m.path}
+                onClick={() => props.onOpen?.(`${props.cwd}/${m.path}`)}
+              >
+                <span style={S.snippet}>
+                  {m.text.slice(0, m.start)}
+                  <mark style={S.mark}>{m.text.slice(m.start, m.end)}</mark>
+                  {m.text.slice(m.end)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {fileHits.length > 0 && grouped.length > 0 && (
+          <div style={S.section}>CONTENTS</div>
+        )}
         {grouped.map(([path, hits]) => (
           <div key={path}>
             <div style={S.file} title={path}>
@@ -177,6 +216,22 @@ export function SearchPane(props: {
       </div>
     </div>
   );
+}
+
+/**
+ * Why a search found nothing, when the reason is the search itself.
+ *
+ * A bare "no matches" is true but unhelpful for the most common miss: typing
+ * a filename like `agent.md` into a *contents* search. The dot is a literal
+ * here, nothing contains that text, and the file you meant is sitting in the
+ * tree -- so say which question was actually asked.
+ */
+function noMatchHint(query: string, regex: boolean): string {
+  const q = query.trim();
+  if (!regex && /[.*+?^$()[\]{}|\\]/.test(q)) {
+    return `no matches — searched for the literal text "${q}"; use .* for a pattern`;
+  }
+  return "no matches";
 }
 
 function Toggle(props: {
@@ -228,6 +283,10 @@ const S: Record<string, React.CSSProperties> = {
     background: "transparent", color: C.fg, fontSize: 10, cursor: "pointer",
   },
   results: { flex: 1, overflow: "auto", minHeight: 0 },
+  section: {
+    padding: "5px 9px 3px", color: C.faint, fontSize: 9.5,
+    letterSpacing: "0.08em", fontFamily: "Menlo, monospace",
+  },
   file: {
     padding: "4px 9px", color: "#58a6ff", fontSize: 11,
     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",

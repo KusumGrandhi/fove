@@ -460,10 +460,21 @@ describe("pane commands resolve through the login shell", () => {
       args: ["one two", "three"],
       cols: 80, rows: 24,
     });
+    /*
+     * Resolve as soon as the expected output arrives, with the timeout only as
+     * a backstop.
+     *
+     * A fixed 2s wait passed alone and failed occasionally under full-suite
+     * load, where a login shell has not echoed yet -- a flaky test rather than
+     * a real defect, but one that makes every future failure ambiguous.
+     */
     const out = await new Promise<string>((resolve) => {
       let acc = "";
-      s.proc.onData((d: string) => { acc += d; });
-      setTimeout(() => resolve(acc), 2000);
+      const timer = setTimeout(() => resolve(acc), 8000);
+      s.proc.onData((d: string) => {
+        acc += d;
+        if (acc.includes("one two three")) { clearTimeout(timer); resolve(acc); }
+      });
     });
     svc.kill("quoting");
     expect(out).toContain("one two three");

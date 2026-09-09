@@ -224,15 +224,25 @@ const S: Record<string, React.CSSProperties> = {
                   padding: "6px 9px 2px", letterSpacing: 0.5 },
   row: { display: "flex", gap: 5, alignItems: "center", padding: "2px 9px", lineHeight: "17px" },
   ellipsis: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 },
-  diff: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column" },
+  diff: { flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" },
   diffHeader: { display: "flex", gap: 8, alignItems: "center", padding: "5px 9px",
                 borderBottom: `1px solid ${C.line}`, color: C.dim, flexShrink: 0 },
   openBtn: { background: "transparent", border: `1px solid ${C.line}`, color: C.dim,
              borderRadius: 4, padding: "1px 7px", cursor: "pointer", fontSize: 11 },
-  diffBody: { flex: 1, overflow: "auto", fontFamily: 'Menlo, "SF Mono", monospace', fontSize: 11 },
+  diffBody: { flex: 1, minHeight: 0, overflow: "auto", fontFamily: 'Menlo, "SF Mono", monospace', fontSize: 11 },
   hunkHeader: { color: C.faint, background: "#101017", padding: "3px 9px",
-                borderTop: `1px solid ${C.line}`, position: "sticky", top: 0 },
-  diffLine: { display: "flex", cursor: "pointer", lineHeight: "16px", whiteSpace: "pre" },
+                borderTop: `1px solid ${C.line}`, position: "sticky", top: 0,
+                // Sticks to the top *and* to the left edge: without a width
+                // tied to the scrolled content, scrolling right slides the
+                // header's background out and leaves the text floating.
+                left: 0, minWidth: "min-content" },
+  // `min-content` so a long source line widens the row instead of being
+  // squeezed to the container and clipped: diffBody scrolls horizontally, but
+  // only if the rows may be wider than it.
+  diffLine: {
+    display: "flex", cursor: "pointer", lineHeight: "16px", whiteSpace: "pre",
+    minWidth: "min-content",
+  },
   gutter: { width: 44, textAlign: "right", paddingRight: 8, color: C.faint, flexShrink: 0 },
   code: { flex: 1, overflow: "hidden", textOverflow: "ellipsis" },
 };

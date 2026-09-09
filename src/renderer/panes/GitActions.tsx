@@ -645,7 +645,20 @@ const tabStyle = (on: boolean): React.CSSProperties => ({
 });
 
 const S: Record<string, React.CSSProperties> = {
-  wrap: { display: "flex", flexDirection: "column", minHeight: 0, borderTop: "1px solid #23232c" },
+  wrap: {
+    display: "flex", flexDirection: "column", minHeight: 0,
+    borderTop: "1px solid #23232c",
+    /*
+     * Scrolls, and never takes more than half the pane.
+     *
+     * The toolbar wraps onto more rows as the pane narrows and the commit box
+     * sits below it, so in a short pane this block is taller than the space
+     * left for it -- measured at 226px of content inside a 192px pane, which
+     * pushed the file list off the bottom entirely. The cap keeps the list
+     * visible; the scroll keeps the commit button reachable.
+     */
+    overflowY: "auto", maxHeight: "50%", flexShrink: 0,
+  },
   tabs: { display: "flex", alignItems: "center", gap: 4, padding: "5px 8px", background: "#12121a" },
   body: { display: "flex", flexDirection: "column", gap: 6, padding: "6px 8px" },
   rowBar: { display: "flex", alignItems: "center", gap: 6 },
@@ -721,7 +734,13 @@ const S: Record<string, React.CSSProperties> = {
     // lines while wasting space in a tall pane.
     maxHeight: "min(46vh, 420px)", overflow: "auto", background: C.bg,
   },
-  diffLine: { display: "flex", cursor: "pointer", lineHeight: "15px", whiteSpace: "pre" },
+  // `min-content` so a long source line widens the row instead of being
+  // squeezed to the container and clipped -- the parent scrolls horizontally,
+  // but only if the rows are actually allowed to be wider than it.
+  diffLine: {
+    display: "flex", cursor: "pointer", lineHeight: "15px", whiteSpace: "pre",
+    minWidth: "min-content",
+  },
   diffGutter: { width: 40, textAlign: "right", paddingRight: 8, color: C.faint, flexShrink: 0 },
   diffCode: { flex: 1, paddingLeft: 2 },
   openBtn: {
