@@ -101,6 +101,48 @@ describe("staging", () => {
     expect(existsSync(join(dir, "also-new.txt"))).toBe(false);
   });
 
+  test("accepting files one at a time commits exactly those", async () => {
+    /*
+     * Keel's review gesture: accept per file (which stages it), commit the
+     * set. The property that matters is that a file you did not accept -- or
+     * un-accepted after looking closer -- stays out of the commit.
+     */
+    await writeFile(join(dir, "a.txt"), "turn edit\n");
+    await writeFile(join(dir, "new.txt"), "created by the turn\n");
+    await writeFile(join(dir, "unwanted.txt"), "not accepted\n");
+
+    await g.stage(dir, ["a.txt"]);
+    await g.stage(dir, ["new.txt"]);
+    await g.unstage(dir, ["new.txt"]);          // looked closer, took it back
+
+    expect((await g.commit(dir, "only what was accepted")).ok).toBe(true);
+
+    const { stdout: inCommit } = await git(dir, ["show", "--name-only", "--format=", "HEAD"]);
+    expect(inCommit).toContain("a.txt");
+    expect(inCommit).not.toContain("new.txt");
+    expect(inCommit).not.toContain("unwanted.txt");
+
+    // And the ones left behind are still there to work on.
+    const { stdout: left } = await git(dir, ["status", "--porcelain"]);
+    expect(left).toContain("new.txt");
+    expect(left).toContain("unwanted.txt");
+  });
+
+  test("un-accepting an untracked file leaves the file on disk", async () => {
+    /*
+     * Unstaging is not discarding. A file the turn created and you staged by
+     * accident must come out of the index with its contents intact -- before
+     * the first commit that needs `rm --cached`, which `unstage` handles.
+     */
+    await writeFile(join(dir, "created.txt"), "still wanted\n");
+    await g.stage(dir, ["created.txt"]);
+    expect((await g.unstage(dir, ["created.txt"])).ok).toBe(true);
+
+    expect(existsSync(join(dir, "created.txt"))).toBe(true);
+    const { stdout } = await git(dir, ["status", "--porcelain"]);
+    expect(stdout).toMatch(/\?\? created\.txt/);
+  });
+
   test("discard leaves paths it was not given alone", async () => {
     /*
      * The safety property Keel depends on: a file already dirty when the turn

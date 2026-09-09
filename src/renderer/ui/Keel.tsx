@@ -125,6 +125,127 @@ export function Keel(props: {
 
   const [reverting, setReverting] = useState(false);
   const [revertError, setRevertError] = useState<string | null>(null);
+  const [committing, setCommitting] = useState(false);
+  const [commitMsg, setCommitMsg] = useState("");
+  const [composing, setComposing] = useState(false);
+  /** Paths currently in the index, so a card can show itself as accepted. */
+  const [staged, setStaged] = useState<Set<string>>(new Set());
+  const [busyPath, setBusyPath] = useState<string | null>(null);
+
+  /**
+   * Read which files are staged, from git rather than from memory.
+   *
+   * The index is shared: the git pane stages, the terminal stages, and a
+   * `claude` session in a pane can stage too. Keeping a local guess would let
+   * this screen disagree with the repository about what you have accepted.
+   */
+  const readStaged = async (): Promise<void> => {
+    try {
+      const s = await window.th.gitStatus(props.cwd) as
+        { files?: { path: string; staged: string | null }[] } | undefined;
+      setStaged(new Set((s?.files ?? []).filter((f) => f.staged !== null).map((f) => f.path)));
+    } catch {
+      // A status read failing is not worth a message; the cards simply do not
+      // claim anything is accepted.
+      setStaged(new Set());
+    }
+  };
+
+  useEffect(() => { void readStaged(); }, [props.cwd, review]);
+
+  /** Accept one file, or take the acceptance back. */
+  const setFileStaged = async (path: string, want: boolean): Promise<void> => {
+    setBusyPath(path);
+    setRevertError(null);
+    try {
+      const r = await (want
+        ? window.th.gitStage(props.cwd, [path])
+        : window.th.gitUnstage(props.cwd, [path])) as
+        { ok?: boolean; stderr?: string } | undefined;
+      if (r && r.ok === false) {
+        setRevertError(r.stderr?.trim() || `could not ${want ? "stage" : "unstage"} ${path}`);
+      }
+      await readStaged();
+    } catch (e) {
+      setRevertError((e as Error).message);
+    } finally {
+      setBusyPath(null);
+    }
+  };
+
+  /**
+   * Commit this turn's files, and only this turn's.
+   *
+   * Committing is not merging. The loop ends at *ready to review* because the
+   * judgment is yours -- but recording what you just reviewed, on your branch,
+   * with nothing pushed, is not that judgment. It is the bookkeeping that
+   * follows it, and this screen is where you have the diff in front of you.
+   *
+   * Staged by explicit path, never `commit -a`: the carried files are work in
+   * progress this screen has just told you the turn did not touch, and
+   * sweeping them into your commit would make the summary above a lie.
+   */
+  /** Accept every file this turn touched, still by explicit path. */
+  const acceptAll = async (): Promise<void> => {
+    const paths = changed.map((f) => f.path).filter((p) => !staged.has(p));
+    if (paths.length === 0) return;
+    setBusyPath("*");
+    setRevertError(null);
+    try {
+      const r = await window.th.gitStage(props.cwd, paths) as
+        { ok?: boolean; stderr?: string } | undefined;
+      if (r && r.ok === false) {
+        setRevertError(r.stderr?.trim() || "could not stage those files");
+      }
+      await readStaged();
+    } catch (e) {
+      setRevertError((e as Error).message);
+    } finally {
+      setBusyPath(null);
+    }
+  };
+
+  /** This turn's files that you have accepted. The commit is exactly these. */
+  const accepted = changed.filter((f) => staged.has(f.path));
+
+  const commit = async (): Promise<void> => {
+    if (accepted.length === 0 || !commitMsg.trim()) return;
+
+    setCommitting(true);
+    setRevertError(null);
+    try {
+      /*
+       * Staged again by explicit path, immediately before committing.
+       *
+       * The cards already staged them, but a file can be edited after being
+       * accepted -- by you, or by an agent still running in a pane underneath.
+       * Re-staging means the commit contains what the card showed rather than
+       * a half-old index entry.
+       */
+      const s = await window.th.gitStage(props.cwd, accepted.map((f) => f.path)) as
+        { ok?: boolean; stderr?: string } | undefined;
+      if (s && s.ok === false) {
+        setRevertError(s.stderr?.trim() || "could not stage those files");
+        return;
+      }
+      const r = await window.th.gitCommit(props.cwd, commitMsg.trim()) as
+        { ok?: boolean; stderr?: string; stdout?: string } | undefined;
+      if (r && r.ok === false) {
+        // A failing pre-commit hook lands here, and its output is the useful
+        // part -- so it is shown verbatim rather than summarised.
+        setRevertError((r.stderr || r.stdout || "").trim() || "commit failed");
+        return;
+      }
+      setCommitMsg("");
+      setComposing(false);
+      await readStaged();
+      props.onRefresh();
+    } catch (e) {
+      setRevertError((e as Error).message);
+    } finally {
+      setCommitting(false);
+    }
+  };
 
   /**
    * Undo this turn's work, and only this turn's.
@@ -264,6 +385,10 @@ export function Keel(props: {
                       <FileCard
                         key={f.path}
                         file={f}
+                        staged={staged.has(f.path)}
+                        busy={busyPath === f.path}
+                        onStage={() => void setFileStaged(f.path, true)}
+                        onUnstage={() => void setFileStaged(f.path, false)}
                         onOpen={() => props.onOpenFile(`${props.cwd}/${f.path}`)}
                       />
                     ))}
@@ -297,20 +422,86 @@ export function Keel(props: {
                   */}
                 {changed.length > 0 && (
                   <div style={S.actions}>
-                    <button
-                      style={S.secondary}
-                      onClick={() => void revert()}
-                      disabled={reverting}
-                      title={changed.map((f) => f.path).join("\n")}
-                    >
-                      {reverting
-                        ? "reverting…"
-                        : `Revert the ${changed.length} file${changed.length === 1 ? "" : "s"} this turn touched`}
-                    </button>
-                    <span style={{ flex: 1 }} />
-                    <span style={{ ...TYPE.body115, color: INK.i5 }}>
-                      Files already dirty before the turn are left alone.
-                    </span>
+                    {composing ? (
+                      <div style={S.composer}>
+                        <textarea
+                          autoFocus
+                          style={S.msg}
+                          placeholder="What did this turn do, and why?"
+                          value={commitMsg}
+                          onChange={(e) => setCommitMsg(e.target.value)}
+                          // The overlay closes on Escape and Keel's own keys
+                          // must not fire while a message is being typed.
+                          onKeyDown={(e) => {
+                            e.stopPropagation();
+                            if (e.key === "Escape") setComposing(false);
+                            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void commit();
+                          }}
+                        />
+                        <div style={S.composerRow}>
+                          <button
+                            style={S.primary}
+                            onClick={() => void commit()}
+                            disabled={committing || !commitMsg.trim() || accepted.length === 0}
+                          >
+                            {committing
+                              ? "committing…"
+                              : `Commit ${accepted.length} accepted file${accepted.length === 1 ? "" : "s"}`}
+                            <span style={S.kbd}>⌘↵</span>
+                          </button>
+                          <button style={S.secondary} onClick={() => setComposing(false)}>
+                            cancel
+                          </button>
+                          <span style={{ flex: 1 }} />
+                          <span style={{ ...TYPE.body115, color: INK.i5 }}>
+                            Commits to this branch. Nothing is pushed or merged.
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        {/*
+                          * Accept-all is a shortcut for the per-file gesture,
+                          * not a separate path: it stages the same files the
+                          * cards would, so the commit below is always exactly
+                          * what is in the index.
+                          */}
+                        {accepted.length < changed.length && (
+                          <button
+                            style={S.secondary}
+                            onClick={() => void acceptAll()}
+                            disabled={busyPath !== null}
+                            title={changed.map((f) => f.path).join("\n")}
+                          >
+                            Accept all {changed.length}
+                          </button>
+                        )}
+                        <button
+                          style={{ ...S.primary, opacity: accepted.length === 0 ? 0.45 : 1 }}
+                          onClick={() => setComposing(true)}
+                          disabled={accepted.length === 0}
+                          title={accepted.map((f) => f.path).join("\n")}
+                        >
+                          {accepted.length === 0
+                            ? "Accept a file to commit"
+                            : `Commit ${accepted.length} accepted`}
+                        </button>
+                        <button
+                          style={S.secondary}
+                          onClick={() => void revert()}
+                          disabled={reverting}
+                          title={changed.map((f) => f.path).join("\n")}
+                        >
+                          {reverting
+                            ? "reverting…"
+                            : `Revert the ${changed.length} file${changed.length === 1 ? "" : "s"} this turn touched`}
+                        </button>
+                        <span style={{ flex: 1 }} />
+                        <span style={{ ...TYPE.body115, color: INK.i5 }}>
+                          Files already dirty before the turn are left alone.
+                        </span>
+                      </>
+                    )}
                   </div>
                 )}
                 {revertError && (
@@ -394,7 +585,15 @@ function Unbounded(props: { reason?: "not-watching" | "not-a-repo" | "running" }
  * and the eyebrow says "state", not "contract", rather than implying a
  * guarantee that is not there.
  */
-function FileCard(props: { file: FileChange; onOpen: () => void }) {
+function FileCard(props: {
+  file: FileChange;
+  onOpen: () => void;
+  /** Whether this file is already staged, so the row can say "accepted". */
+  staged: boolean;
+  busy: boolean;
+  onStage: () => void;
+  onUnstage: () => void;
+}) {
   const { file } = props;
   const [openDiff, setOpenDiff] = useState(false);
   const states = KIND_STATES[file.kind];
@@ -406,6 +605,33 @@ function FileCard(props: { file: FileChange; onOpen: () => void }) {
         <span style={S.filePath}>{file.path}</span>
         <span style={{ ...TYPE.mono105, color: INK.i5 }}>{file.status}</span>
         <span style={{ flex: 1 }} />
+        {/*
+          * Accepting a file stages it.
+          *
+          * Staging is the natural per-file verdict: it is already git's own
+          * "I have looked at this and I want it", it is reversible, and it is
+          * what the commit below then takes. Reviewing file by file and
+          * committing the set is the shape of the work.
+          */}
+        {props.staged ? (
+          <button
+            style={S.acceptedBtn}
+            onClick={props.onUnstage}
+            disabled={props.busy}
+            title="Unstage this file"
+          >
+            ✓ accepted
+          </button>
+        ) : (
+          <button
+            style={S.linkBtn}
+            onClick={props.onStage}
+            disabled={props.busy}
+            title="Stage this file"
+          >
+            accept
+          </button>
+        )}
         <button
           style={S.linkBtn}
           onClick={() => { setOpenDiff((v) => !v); props.onOpen(); }}
@@ -527,10 +753,31 @@ const S: Record<string, React.CSSProperties> = {
   },
 
   actions: { display: "flex", gap: 8, alignItems: "center", paddingTop: 4, flexWrap: "wrap" },
+  // These were both inert when the row was first drawn, hence the
+  // not-allowed cursor and the dimming. They do things now.
   secondary: {
     height: 36, padding: "0 16px", borderRadius: 8,
     border: `1px solid ${BORDER.b2}`, background: "transparent", color: INK.i2,
-    ...TYPE.body125, cursor: "not-allowed", opacity: 0.45,
+    ...TYPE.body125, cursor: "pointer",
+  },
+  primary: {
+    display: "inline-flex", alignItems: "center", gap: 7,
+    height: 36, padding: "0 16px", borderRadius: 8,
+    border: `1px solid ${BRAND.edge}`, background: BRAND.brand, color: "#fff",
+    ...TYPE.body125, cursor: "pointer",
+  },
+  acceptedBtn: {
+    background: "transparent", border: "none", padding: "0 6px",
+    color: STATE.good, fontFamily: FONT.product, fontSize: 11.5,
+    cursor: "pointer",
+  },
+  composer: { display: "flex", flexDirection: "column", gap: 8, width: "100%" },
+  composerRow: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
+  msg: {
+    width: "100%", minHeight: 68, resize: "vertical", boxSizing: "border-box",
+    padding: "9px 11px", borderRadius: 8,
+    border: `1px solid ${BORDER.b2}`, background: SURFACE.s1, color: INK.i1,
+    fontFamily: FONT.product, fontSize: 13, lineHeight: 1.5, outline: "none",
   },
 
   histRow: { display: "flex", alignItems: "baseline", gap: 12 },
