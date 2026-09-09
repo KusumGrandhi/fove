@@ -28,6 +28,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { fromMarkdown, toMarkdown, seedCandidates, type Intent } from "../shared/intents.js";
+import { spawnEnv } from "./loginPath.js";
 
 const run = promisify(execFile);
 
@@ -194,11 +195,21 @@ export class IntentStore {
     command: string,
   ): Promise<{ passed: boolean; output: string; ranAt: number }> {
     try {
+      /*
+       * The login shell's PATH, not the app's.
+       *
+       * Mechanisms are shell commands people write, and they reach for `rg`
+       * and `fd` -- neither of which is on the minimal PATH a Finder-launched
+       * app inherits. Getting this wrong is worse here than an ENOENT
+       * elsewhere: the command fails, the check is reported as *failed*, and
+       * it reads as though your rule was violated.
+       */
       const { stdout, stderr } = await run("/bin/sh", ["-c", command], {
         cwd,
         timeout: 30_000,
         maxBuffer: 4 * 1024 * 1024,
         windowsHide: true,
+        env: await spawnEnv(),
       });
       return { passed: true, output: (stdout || stderr).slice(0, 4000), ranAt: Date.now() };
     } catch (e) {

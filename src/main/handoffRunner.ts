@@ -21,6 +21,7 @@
 
 import { spawn } from "node:child_process";
 import type { Plan, CheckResult } from "../shared/handoff.js";
+import { spawnEnv } from "./loginPath.js";
 
 /** What one `claude -p` invocation returned. */
 interface ClaudeResult {
@@ -156,11 +157,15 @@ const PHASE_TIMEOUT_MS = 20 * 60 * 1000;
  * read. A loop that crashes on a non-zero exit is worse than one that reports
  * it, because the working tree may already have changes in it.
  */
-function runClaude(
+async function runClaude(
   prompt: string,
   args: string[],
   opts: RunOptions,
 ): Promise<ClaudeResult> {
+  // Resolved before spawning: a Finder-launched app cannot find `claude` on
+  // its inherited PATH. See `loginPath`.
+  const env = await spawnEnv();
+
   return new Promise((resolve) => {
     const argv = [
       "-p", prompt,
@@ -173,9 +178,7 @@ function runClaude(
     const child = spawn("claude", argv, {
       cwd: opts.cwd,
       windowsHide: true,
-      // A login shell's PATH is where `claude` lives; inherit rather than
-      // reconstruct it.
-      env: process.env,
+      env,
       // Its own process group, so a kill reaches the whole tree.
       // `claude` spawns children of its own; signalling only the parent
       // leaves them holding the stdio pipes open, and `close` never fires --
