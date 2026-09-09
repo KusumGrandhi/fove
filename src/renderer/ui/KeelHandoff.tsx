@@ -14,8 +14,9 @@
  * quietly presenting a new one as if it were the old.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SURFACE, BORDER, INK, BRAND, STATE, FONT, TYPE, RADIUS, SHADOW } from "./keel-tokens.js";
+import { planProgress, describeProgress } from "../../shared/progress.js";
 import {
   describe as describePhase, isRunning, needsYou, openQuestions,
   type HandoffState,
@@ -32,8 +33,38 @@ function phaseTone(state: HandoffState): { fg: string; bg: string; edge: string 
   return { fg: INK.i1, bg: BRAND.wash, edge: BRAND.edge };
 }
 
+/**
+ * A clock that ticks while a phase runs.
+ *
+ * Deliberately its own component so the second-by-second re-render is confined
+ * to this one span rather than repainting the whole rail.
+ */
+function Elapsed(props: { since: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  if (!props.since) return null;
+  const secs = Math.max(0, Math.floor((now - props.since) / 1000));
+  const mins = Math.floor(secs / 60);
+  const text = mins > 0 ? `${mins}m ${secs % 60}s` : `${secs}s`;
+
+  return (
+    <span style={{
+      fontFamily: FONT.mono, fontSize: 11, color: INK.i4,
+      fontVariantNumeric: "tabular-nums",
+    }}>
+      {text}
+    </span>
+  );
+}
+
 export function KeelHandoff(props: {
   state: HandoffState;
+  /** Paths the tree says have moved during the running phase. */
+  changedSoFar?: string[];
   /** Budget the next handoff runs under. */
   onStart: (ticket: string, budgetUSD: number) => void;
   onApprove: () => void;
@@ -50,6 +81,8 @@ export function KeelHandoff(props: {
 
   const tone = phaseTone(state);
   const questions = openQuestions(state);
+  const progress = planProgress(state.plan, props.changedSoFar ?? []);
+  const progressLine = describeProgress(progress);
 
   return (
     <div style={S.wrap}>
@@ -131,13 +164,60 @@ export function KeelHandoff(props: {
                 {state.plan.summary}
               </div>
               <div style={S.steps}>
-                {state.plan.steps.map((s) => (
+                {progress.steps.map((s) => (
                   <div key={s.n} style={S.step}>
-                    <span style={S.stepNum}>{s.n}</span>
-                    <span style={{ ...TYPE.body115, color: INK.i3 }}>{s.action}</span>
+                    {/*
+                      * The marker is evidence, not the agent's opinion: a step
+                      * is ticked when the files it said it would touch have
+                      * actually moved. A step that named no files gets a
+                      * hollow marker, because the tree cannot say either way
+                      * and pretending otherwise is the failure mode here.
+                      */}
+                    <span
+                      style={{
+                        ...S.stepNum,
+                        color: s.state === "done" ? STATE.good
+                          : s.state === "unknown" ? INK.i5 : INK.i4,
+                      }}
+                      title={
+                        s.state === "done" ? `changed: ${s.touched.join(", ")}`
+                          : s.state === "pending" ? `waiting on: ${s.awaiting.join(", ")}`
+                            : "this step named no files, so its status cannot be checked"
+                      }
+                    >
+                      {s.state === "done" ? "✓" : s.n}
+                    </span>
+                    <span style={{
+                      ...TYPE.body115,
+                      color: s.state === "done" ? INK.i4 : INK.i3,
+                    }}>
+                      {s.action}
+                    </span>
                   </div>
                 ))}
               </div>
+              {progressLine && (
+                <div style={{ ...TYPE.body115, color: INK.i5, marginTop: 8 }}>
+                  {progressLine}
+                </div>
+              )}
+              {progress.unexpected.length > 0 && (
+                <div style={S.unexpected}>
+                  {/*
+                    * The plan was approved on the strength of what it said it
+                    * would do, so work outside it is worth seeing while it is
+                    * happening rather than at review.
+                    */}
+                  <span style={{ ...TYPE.eyebrow, color: STATE.warn }}>
+                    NO STEP CLAIMED THESE
+                  </span>
+                  <div style={{ ...TYPE.mono105, color: INK.i4, marginTop: 5 }}>
+                    {progress.unexpected.slice(0, 6).join(", ")}
+                    {progress.unexpected.length > 6
+                      && ` and ${progress.unexpected.length - 6} more`}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -237,8 +317,21 @@ export function KeelHandoff(props: {
 
           {isRunning(state) && (
             <div style={S.gateRow}>
+              {/*
+                * Elapsed time, not just usage.
+                *
+                * Usage is reported by the CLI when a phase *finishes*, so it
+                * reads 0.00 for the whole of a run -- which makes a working
+                * agent and a hung one look identical. Planning a task that
+                * has to fetch a ticket and read the codebase legitimately
+                * takes minutes, and the only honest way to say "still
+                * working" is a clock that moves.
+                */}
+              <Elapsed since={state.startedAt} />
               <span style={{ ...TYPE.body115, color: INK.i5, flex: 1 }}>
-                {state.costUSD.toFixed(2)} of {state.budgetUSD.toFixed(2)} used
+                {state.costUSD > 0
+                  ? `${state.costUSD.toFixed(2)} of ${state.budgetUSD.toFixed(2)} used`
+                  : `usage is counted when this phase finishes`}
               </span>
               <button style={S.ghost} onClick={props.onStop}>stop</button>
             </div>
@@ -284,7 +377,15 @@ const S: Record<string, React.CSSProperties> = {
   steps: { display: "flex", flexDirection: "column", gap: 7 },
   step: { display: "flex", gap: 9, alignItems: "baseline" },
   stepNum: {
-    fontFamily: FONT.mono, fontSize: 10.5, color: INK.i5, width: 14, flexShrink: 0,
+    fontFamily: FONT.mono, fontSize: 10.5, color: INK.i5,
+    width: 16, flexShrink: 0, textAlign: "center",
+    // A tick and a digit must occupy the same box or the list jitters as
+    // steps complete.
+    display: "inline-block", lineHeight: "16px",
+  },
+  unexpected: {
+    marginTop: 10, padding: "8px 10px", borderRadius: 7,
+    background: STATE.warnWash, border: `1px solid ${STATE.warnEdge}`,
   },
 
   questions: {

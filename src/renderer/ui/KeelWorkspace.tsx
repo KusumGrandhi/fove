@@ -67,6 +67,8 @@ export function KeelWorkspace(props: {
   open: string[];
   agent: { task?: string; running: boolean; blocked?: string } | null;
   handoff: HandoffState;
+  /** What the tree says has moved during the running phase. */
+  handoffChanges?: string[];
   onStart: (ticket: string, budgetUSD: number) => void;
   onApprove: () => void;
   onReplan: (note: string) => void;
@@ -220,6 +222,7 @@ export function KeelWorkspace(props: {
           <aside style={S.rail}>
             <KeelHandoff
               state={props.handoff}
+              changedSoFar={props.handoffChanges ?? []}
               onStart={props.onStart}
               onApprove={props.onApprove}
               onReplan={props.onReplan}

@@ -91,7 +91,23 @@ export interface RunOptions {
   /** Resume an existing conversation, so later phases keep the context. */
   sessionId?: string;
   signal?: AbortSignal;
+  /** Override the wall-clock ceiling, in ms. See `PHASE_TIMEOUT_MS`. */
+  timeoutMs?: number;
 }
+
+/**
+ * How long one phase may run before it is killed.
+ *
+ * The budget caps *usage*, which is not the same thing: a `claude` that hangs
+ * without producing tokens costs nothing and would otherwise wait forever,
+ * with the UI showing "planning" indefinitely and no way to tell it from work.
+ *
+ * Twenty minutes is deliberately generous. Planning a real ticket means
+ * fetching it, reading the codebase and reasoning about it -- several minutes
+ * is normal, and a ceiling that fires during honest work would be worse than
+ * none. This is the "something is wrong" bound, not a performance target.
+ */
+const PHASE_TIMEOUT_MS = 20 * 60 * 1000;
 
 /**
  * Run `claude -p` once and parse its result.
@@ -120,7 +136,24 @@ function runClaude(
       // A login shell's PATH is where `claude` lives; inherit rather than
       // reconstruct it.
       env: process.env,
+      // Its own process group, so a kill reaches the whole tree.
+      // `claude` spawns children of its own; signalling only the parent
+      // leaves them holding the stdio pipes open, and `close` never fires --
+      // which turns a timeout into the same hang it was meant to end.
+      detached: true,
     });
+
+    /** Kill the whole group, falling back to the child alone. */
+    const killTree = (signal: NodeJS.Signals = "SIGTERM"): void => {
+      try {
+        if (child.pid) process.kill(-child.pid, signal);
+        else child.kill(signal);
+      } catch {
+        // Already gone, or no group: killing the child alone is all that is
+        // left to try, and a failure here means it is already dead.
+        try { child.kill(signal); } catch { /* nothing left to do */ }
+      }
+    };
 
     let out = "";
     let err = "";
@@ -129,17 +162,39 @@ function runClaude(
     child.stdout.on("data", (c: Buffer) => {
       size += c.length;
       // A runaway session should not take the app's memory with it.
-      if (size > 32 * 1024 * 1024) { child.kill(); return; }
+      if (size > 32 * 1024 * 1024) { killTree(); return; }
       out += c.toString();
     });
     child.stderr.on("data", (c: Buffer) => { err += c.toString().slice(0, 4000); });
 
-    opts.signal?.addEventListener("abort", () => child.kill(), { once: true });
+    opts.signal?.addEventListener("abort", () => killTree(), { once: true });
 
-    child.on("error", (e) =>
-      resolve({ ok: false, text: "", costUSD: 0, denials: 0, error: e.message }));
+    // A phase that produces nothing forever is indistinguishable from one
+    // doing careful work, so it needs a wall-clock bound of its own.
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree();
+      // SIGTERM is a request. If the tree is still there shortly after, stop
+      // asking -- otherwise the timeout has simply moved the hang later.
+      setTimeout(() => killTree("SIGKILL"), 2000).unref?.();
+    }, opts.timeoutMs ?? PHASE_TIMEOUT_MS);
+
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      resolve({ ok: false, text: "", costUSD: 0, denials: 0, error: e.message });
+    });
 
     child.on("close", () => {
+      clearTimeout(timer);
+      if (timedOut) {
+        const mins = Math.round((opts.timeoutMs ?? PHASE_TIMEOUT_MS) / 60000);
+        resolve({
+          ok: false, text: "", costUSD: 0, denials: 0,
+          error: `no result after ${mins} minutes — stopped`,
+        });
+        return;
+      }
       try {
         const parsed = JSON.parse(out) as {
           is_error?: boolean;

@@ -338,8 +338,11 @@ const api = {
     ipcRenderer.invoke(CH.handoffReplan, cwd, note),
   handoffStop: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.handoffStop, cwd),
   handoffReset: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.handoffReset, cwd),
-  onHandoffChanged: (fn: (cwd: string, state: unknown) => void): (() => void) => {
-    const h = (_e: unknown, cwd: string, state: unknown): void => fn(cwd, state);
+  onHandoffChanged: (
+    fn: (cwd: string, state: unknown, changedSoFar: string[]) => void,
+  ): (() => void) => {
+    const h = (_e: unknown, cwd: string, state: unknown, changedSoFar: string[] = []): void =>
+      fn(cwd, state, changedSoFar);
     ipcRenderer.on(CH.handoffChanged, h);
     return () => { ipcRenderer.off(CH.handoffChanged, h); };
   },

@@ -289,9 +289,15 @@ ipcMain.handle(CH.intentsRun, (_e, cwd: string, command: string) =>
 // ---- handoff loop ----------------------------------------------------------
 const handoff = new HandoffService(intents);
 // Phases advance on their own, so the renderer is told rather than polling.
-handoff.on("changed", (cwd: string, state: unknown) => send(CH.handoffChanged, cwd, state));
+// The tree's view of what has moved rides along with the state, so the rail
+// can show step status without a second channel that could disagree with it.
+handoff.on("changed", (cwd: string, state: unknown) =>
+  send(CH.handoffChanged, cwd, state, handoff.changedSoFar(cwd)));
 
-ipcMain.handle(CH.handoffState, (_e, cwd: string) => handoff.state(cwd));
+ipcMain.handle(CH.handoffState, (_e, cwd: string) => ({
+  state: handoff.state(cwd),
+  changedSoFar: handoff.changedSoFar(cwd),
+}));
 ipcMain.handle(CH.handoffStart, (_e, cwd: string, ticket: string, budget: number) =>
   // Not awaited: planning takes ~50s and the renderer follows the events.
   void handoff.start(cwd, ticket, budget),

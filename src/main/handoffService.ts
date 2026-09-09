@@ -21,7 +21,7 @@ import {
 } from "../shared/handoff.js";
 import { HandoffRunner } from "./handoffRunner.js";
 import { IntentStore } from "./intentStore.js";
-import { SnapshotStore } from "./snapshots.js";
+import { SnapshotStore, takeSnapshot } from "./snapshots.js";
 import { compareSnapshots } from "../shared/changeset.js";
 
 export class HandoffService extends EventEmitter {
@@ -31,6 +31,47 @@ export class HandoffService extends EventEmitter {
   private readonly aborts = new Map<string, AbortController>();
   /** Where the tree stood when execution began, for the change set. */
   private readonly snapshots = new SnapshotStore();
+  /** Live per-cwd polling of what has moved, while a phase is executing. */
+  private readonly watchers = new Map<string, ReturnType<typeof setInterval>>();
+  /** Paths seen to have moved so far this execution, for step status. */
+  private readonly progress = new Map<string, string[]>();
+
+  /** What has changed so far in the running execution, for the UI. */
+  changedSoFar(cwd: string): string[] {
+    return this.progress.get(cwd) ?? [];
+  }
+
+  /**
+   * Poll the tree while the agent works, so the plan can show its status.
+   *
+   * Polling rather than a filesystem watcher: the comparison is against the
+   * opening snapshot, which is a whole-tree hash read anyway, and a watcher
+   * would fire on every intermediate write an editor makes. Four seconds is
+   * slow enough to cost nothing and fast enough that a step lights up while
+   * you are still looking at it.
+   */
+  private startWatching(cwd: string): void {
+    this.stopWatching(cwd);
+    const tick = async (): Promise<void> => {
+      const opening = this.snapshots.opening(cwd);
+      if (!opening) return;
+      const now = await takeSnapshot(cwd);
+      if (!now) return;
+      const changed = compareSnapshots(opening, now).changed.map((c) => c.path);
+      const prev = this.progress.get(cwd) ?? [];
+      // Only wake the renderer when the set actually moved.
+      if (prev.length !== changed.length || prev.some((p, i) => p !== changed[i])) {
+        this.progress.set(cwd, changed);
+        this.emit("changed", cwd, this.state(cwd));
+      }
+    };
+    this.watchers.set(cwd, setInterval(() => void tick(), 4000));
+  }
+
+  private stopWatching(cwd: string): void {
+    const t = this.watchers.get(cwd);
+    if (t) { clearInterval(t); this.watchers.delete(cwd); }
+  }
 
   constructor(private readonly intents: IntentStore) {
     super();
@@ -101,6 +142,10 @@ export class HandoffService extends EventEmitter {
     // Snapshot before any edit, so the change set is the turn's work rather
     // than everything uncommitted.
     await this.snapshots.begin(cwd);
+    // From here the tree is the record of what the agent is doing, so the
+    // plan's steps can report their own status while it works.
+    this.progress.set(cwd, []);
+    this.startWatching(cwd);
 
     const exec = await this.runner.execute(approved.plan, {
       cwd,
@@ -108,6 +153,8 @@ export class HandoffService extends EventEmitter {
       sessionId: approved.sessionId,
       signal: abort.signal,
     });
+
+    this.stopWatching(cwd);
 
     if (!exec.ok) {
       this.apply(cwd, { type: "failed", reason: exec.error ?? "execution failed" });
@@ -182,6 +229,7 @@ export class HandoffService extends EventEmitter {
   stop(cwd: string, reason = "you stopped it"): void {
     this.aborts.get(cwd)?.abort();
     this.aborts.delete(cwd);
+    this.stopWatching(cwd);
     this.apply(cwd, { type: "stop", reason });
   }
 
@@ -189,6 +237,8 @@ export class HandoffService extends EventEmitter {
   reset(cwd: string): void {
     this.aborts.get(cwd)?.abort();
     this.aborts.delete(cwd);
+    this.stopWatching(cwd);
+    this.progress.delete(cwd);
     this.states.delete(cwd);
     this.snapshots.forget(cwd);
     this.emit("changed", cwd, initial());

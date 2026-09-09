@@ -371,6 +371,8 @@ export function App() {
    * normal case -- planning takes about a minute.
    */
   const [handoffs, setHandoffs] = useState<Record<string, HandoffState>>({});
+  /** Per-workspace: what the tree says has moved during the running phase. */
+  const [handoffChanges, setHandoffChanges] = useState<Record<string, string[]>>({});
   const [worklist, setWorklist] = useState<WorklistWire | null>(null);
   const [cards, setCards] = useState<Record<string, CardWire | undefined>>({});
   /** Open file cards. Capped at two, per rule 4; a third closes the oldest. */
@@ -743,8 +745,10 @@ export function App() {
   // Phases advance on their own, so the main process pushes rather than being
   // polled -- a poll would either lag a 50s plan or hammer for nothing.
   useEffect(() => {
-    const off = window.th.onHandoffChanged((cwd, state) => {
+    const off = window.th.onHandoffChanged((cwd, state, changedSoFar) => {
       setHandoffs((prev) => ({ ...prev, [cwd]: state as HandoffState }));
+      // What the tree says has moved so far, for the plan's step status.
+      setHandoffChanges((prev) => ({ ...prev, [cwd]: changedSoFar ?? [] }));
     });
     return off;
   }, []);
@@ -797,8 +801,10 @@ export function App() {
      */
     if (active) {
       void (async () => {
-        const s = (await window.th.handoffState(active.cwd)) as HandoffState;
-        setHandoffs((prev) => ({ ...prev, [active.cwd]: s }));
+        const r = (await window.th.handoffState(active.cwd)) as
+          { state: HandoffState; changedSoFar: string[] };
+        setHandoffs((prev) => ({ ...prev, [active.cwd]: r.state }));
+        setHandoffChanges((prev) => ({ ...prev, [active.cwd]: r.changedSoFar ?? [] }));
       })();
     }
   }, [loadKeel, loadWorklist, active]);
@@ -1010,6 +1016,7 @@ export function App() {
           onShowTurn={() => setKeelView("turn")}
           onShowIntents={() => { setKeelView("intents"); void loadIntents(); }}
           handoff={handoffs[active.cwd] ?? initialHandoff()}
+          handoffChanges={handoffChanges[active.cwd] ?? []}
           onStart={(ticket, budget) => void window.th.handoffStart(active.cwd, ticket, budget)}
           onApprove={() => void window.th.handoffApprove(active.cwd)}
           onReplan={(note) => void window.th.handoffReplan(active.cwd, note)}
