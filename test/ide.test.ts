@@ -462,10 +462,22 @@ describe("pane commands resolve through the login shell", () => {
       args: ["-c", "command -v claude >/dev/null && echo FOUND || echo MISSING"],
       cols: 80, rows: 24,
     });
+    /*
+     * Resolve on the answer, with the timeout only as a backstop.
+     *
+     * A login shell sources the whole profile before running anything, which
+     * under full-suite load takes longer than a fixed 2.5s wait -- and the
+     * failure reads as `expected '' to contain 'FOUND'`, i.e. no output at
+     * all, which looks like a wrong answer rather than a slow one. Third
+     * instance of this same mistake in this file.
+     */
     const out = await new Promise<string>((resolve) => {
       let acc = "";
-      s.proc.onData((d: string) => { acc += d; });
-      setTimeout(() => resolve(acc), 2500);
+      const timer = setTimeout(() => resolve(acc), 15000);
+      s.proc.onData((d: string) => {
+        acc += d;
+        if (/FOUND|MISSING/.test(acc)) { clearTimeout(timer); resolve(acc); }
+      });
     });
     svc.kill("shellresolve");
     expect(out).toContain("FOUND");
