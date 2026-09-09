@@ -1,328 +1,225 @@
-# fove v0.9 — Keel, a console for delegated work
+# fove v0.9 — Keel, and the handoff loop
 
-v0.7 made fove a daily driver. v0.8 (in progress) fixes the human loop: better
-layouts, readable history, review of what changed.
+**Status: shipped.** Rewritten after the fact to describe what landed, the way
+`PLAN-v0.8.md` was. The original plan is in git history (`8b4d20d`); where it
+was wrong, §4 says so rather than editing the mistake away.
 
-v0.9 is about the other mode. You either drive the panes yourself, or you
-**hand a task to an agent and watch it through Keel** — an overlay over the
-panes, dismissed with Escape, that answers one question: *what did it do, and
-is any of it wrong?* When Keel confuses you, you close it and the panes are
-still there, still running.
+The release criterion was set before the work started and did not move:
 
-Intents belong to a repository, not to fove: each workspace carries its own
-rules, committed alongside its code. `core` is used throughout this document as
-the worked example because it is the repository with the most existing
-convention to draw on — findings marked **[verified]** were measured against it,
-and several changed the plan. Nothing here is specific to it.
+> *when we are able to do a complete loop of I handoff a ticket to Keel and it
+> is able to safely plan, execute, check for risk/bugs and then ready to Review
+> state. That's when we publish 0.9*
+
+That loop runs. §2 is the transcript of it running.
 
 ---
 
-## 0. The decision that shapes everything
+## 1. What shipped
 
-Keel is **an overlay, not a mode and not a replacement IDE.**
+### Keel, an overlay
 
-The Keel design handoff proposes an application where source code is a
-destination rather than a panel — no editor in the resting layout. As a
-whole-app commitment that is a bet on a codebase we do not have (see §5). As a
-**dismissible overlay** it is not a bet at all: the panes are underneath, and
-if the summary cannot tell you enough, you close it and read the code. The
-design becomes falsifiable per-use rather than all at once.
+You hand fove a task and watch it through Keel — layered **over** the panes,
+dismissed with Escape, never replacing them. Panes keep running underneath:
+nothing unmounts, no PTY dies, the agent does not pause. When Keel cannot tell
+you enough, you close it and read the code.
 
-Consequences, which are constraints on everything below:
+It sits at z-index 50, below the palette and below Claude's blocking diff (both
+60), so an approval Claude is waiting on always wins.
 
-- Panes keep running while Keel is open. Nothing unmounts, no PTY dies, the
-  agent does not pause.
-- Keel layers **below** the command palette and below Claude's blocking diff
-  **[verified: palette and DiffView are z-index 60; Keel takes 50]**, so an
-  approval Claude is waiting on always wins.
-- **Anything blocking must be visible with Keel closed.** An overlay cannot be
-  the only home for a decision that stops work. The stats rail — already built,
-  already collapsible — is where the current step and any blocking decision live.
+Four surfaces, built to the design handoff:
 
----
+- **`2c` review** (872px) — what the last turn changed, file by file, with what
+  is *known* separated from what *cannot be proven here*.
+- **`4a` workspace** (250px │ 1fr │ 316px) — file cards with each file's
+  extracted contract, its purpose, and the rail of risks and checks.
+- **`2d` intents** — the repository's rules, owned by you, proposable by an
+  agent but never editable by one.
+- **The handoff rail** — ticket box → plan → gate → checks → ready.
 
-## 1. Intents — the part worth getting right
+### The handoff loop
 
-An intent is **a rule about the codebase, in English, that must stay true**.
-Not what code does (that is documentation, and it rots) but what it must never
-stop doing. It is the thing you say in review — *"you can't do that here,
-because…"* — written down where an agent can read it.
-
-### They already exist
-
-**[verified]** `core/AGENTS.md` is 148 lines and already contains them:
-
-- never commit or push unless a human asks
-- never skip pre-commit hooks
-- no `print()` in production code
-- never bare `except:`
-- reuse code — search before writing new utilities
-- whenever you create/update/delete a synced entity in Postgres, call the
-  matching Elasticsearch sync helper in the same code path
-
-So v0.9 is **not** "author intents from nothing". It is "make the rules already
-written enforceable". That is a much smaller and much more honest job.
-
-### Prose first, mechanisms as an upgrade
-
-Every intent is prose. A **mechanism** — a grep, a test, a static rule — is
-optional and is an *upgrade*, never an entry requirement.
-
-This inverts an earlier position of mine that was wrong. Requiring a mechanism
-before a rule may exist means you write four rules and stop, and the rules that
-matter most are often the least checkable: *"error messages should say what to
-do next"* will never have a mechanism and is exactly the nuance that makes a
-codebase yours.
-
-### Why keep any mechanisms at all
-
-Not for simple rules versus complex ones. For **searches versus judgments**.
-
-**[verified]** `core` has **zero** bare `except:` — that rule holds on prose
-alone. It also has **19 files with `print()`** in `flask/core`, which
-`AGENTS.md` forbids. Same document, same authority, one rule quietly violated
-nineteen times.
-
-The difference is that finding `print()` is a needle-in-haystack search across
-2,571 files, and that is the one job where a deterministic check beats a model
-outright — not because it is smarter, but because it does not get tired on file
-seven of a nine-file diff.
-
-So:
-
-| Check is a… | Owner | Example |
-|---|---|---|
-| **search** — exhaustive, boring, high-volume | mechanism | `print()`, `float(` on money, missing ES sync |
-| **judgment** — does this count as X | agent | "is this cache a sanctions cache", "is this error actionable" |
-
-### The discriminator, and what it is actually for
-
-A second agent reads the change and the intents and says **which intents are in
-play**. This is real work that a mechanism cannot do, and it is the part I
-initially got wrong.
-
-A mechanism only runs once you already know it is relevant. If an agent edits
-`providers/comply_advantage.py` to add a response cache, nothing in that diff
-mentions sanctions; a file-glob lookup misses it, and a sanctions test only
-fires if someone already wired it to that path. An agent reading the diff can
-say *"this is a cache on the sanctions provider — the freshness clause
-applies."* That is judgment, and it is the highest-value thing an agent does here.
-
-**The honest limit** is not whether to use a discriminator, but what its verdict
-means. Two failure shapes, badly asymmetric:
-
-- *"clause applies and looks violated"* → you look. Cheap when wrong.
-- *"no intents affected"* → Keel shows nothing, you merge. **Expensive when
-  wrong, and invisible.**
-
-Correlated failure bites the second case: a discriminator reading the same diff
-with the same model as the writer shares its blind spots, and the misses cluster
-exactly where the code is subtle. So:
-
-**A discriminator's silence is a weaker signal than a mechanism's pass, and Keel
-must render them differently.**
-
-### The three signal strengths — the core UI commitment
-
-| Signal | Rendered as | Meaning |
-|---|---|---|
-| Mechanism ran and passed | **proven** | Deterministic |
-| Discriminator flagged a clause | **flagged — check this** | Worth your eyes |
-| Nothing checked this change | **unchecked** | Never green |
-
-The third row is the whole design. If "no agent objected" renders like "a test
-passed", trust becomes unmeasurable. Kept distinct, every drop-back to the panes
-where Keel said *unchecked* is a data point, and each one is a candidate for a
-new mechanism — the deterministic floor grows from real friction instead of
-guesswork.
-
-### Schema — behaviour-scoped with a file hint
-
-The handoff scopes intents to files (`bands.intent` beside `bands.ts`). That
-does not survive `core`: *"a synced entity's Postgres write is always paired
-with an ES sync"* spans **24 files** **[verified]**. File-scoped intents cannot
-express it.
-
-So intents are behaviour-scoped, with an optional glob narrowing where the
-discriminator looks first:
+`shared/handoff.ts` is a pure state machine, tested as rules rather than as a
+happy path, because the phases *are* the safety story:
 
 ```
-id: es-sync-pairing
-rule: A create/update/delete of a synced entity in Postgres calls the
-      matching Elasticsearch sync helper in the same code path.
-scope: flask/core/**            # a hint, not a boundary
-mechanism: tools/checks/es_sync.py     # optional
+idle → planning → awaiting-approval → executing → checking → ready
 ```
 
-Prose and `id` required. Everything else optional.
+Three properties it exists to enforce:
 
-### Where intents live — outside the repository, always
+- **Planning cannot write.** The plan phase runs under `--permission-mode plan`.
+  Verified against real `claude` by asking it to modify a file in a scratch
+  repository and finding the file untouched — a proposal that edited files on
+  the way to being proposed is not a proposal.
+- **A plan is approved before it runs**, and a *revised* plan is unapproved
+  again. An agent may propose a different plan, but the approval it was given
+  was for the plan it had, and that approval does not transfer. This is the rule
+  that stops an agent changing course quietly mid-execution.
+- **The loop never ends at merged.** `ready` is terminal. There is no merge
+  event, here or anywhere: Keel assembles evidence, and the judgment stays
+  yours.
 
-`~/.fove/intents/<repo-identity>/*.md`. **Never inside the working tree.**
+Execution runs under `acceptEdits`, not `bypassPermissions` — edits proceed,
+but a shell command with consequences still stops. The plan was approved, not a
+blank cheque.
 
-This is a hard constraint, not a preference. `core` is a production repository
-shared with a team; adding a `.fove/` directory to it would mean opening a PR
-that puts one developer's tooling config into everyone's checkout. That is not
-ours to do, and a tool that requires it will simply not be used.
+### What the loop rests on
 
-Consequences worth stating, because they are real costs:
+Built in order, each proved as a pure module before any UI touched it:
 
-- **Intents and mechanisms are yours, not the team's.** They do not arrive by
-  `git pull` and nobody else benefits from them. That is the price of not
-  touching the repo, and it is the right trade.
-- **Keyed by repository identity, not path**, so a worktree of `core` shares
-  the parent's intents rather than starting empty. Identity is the first remote
-  URL, falling back to the root commit sha for a repo with no remote — both
-  stable across clones and worktrees, unlike a filesystem path.
-- **Mechanisms are scripts under `~/.fove/`**, run against the workspace
-  directory. They never live in the repo either, so a mechanism cannot be a
-  pre-commit hook or a CI check — it runs when fove asks it to, and only for
-  you.
-- **Nothing fove writes ever appears in `git status`.** A tool that dirties the
-  working tree of a production repo is a tool you have to remember to clean up
-  before every commit.
-
-**`AGENTS.md` is the seed, read-only.** The first intents come from reading what
-the repo already documents — `AGENTS.md`, `CLAUDE.md/`, a CONTRIBUTING file —
-and copying them out into your own store. fove reads those files; it never
-writes to them.
-
-If a team later wants to share a set, that is an export — a file they choose to
-commit, on their initiative. Not the default, and not something fove does on
-its own.
-
----
-
-## 2. The turn boundary — the foundation
-
-Nothing in §3 works without knowing what a turn changed. Shared with v0.8 §1/§4,
-and the argument for doing them together.
-
-- Snapshot `git status` when a turn starts; diff against it when the turn ends.
-- Per-worktree, so a session in one worktree cannot contaminate another.
-- **Attribution is a heuristic, not a fact.** You edit files too, and so do
-  background agents. The UI says *"changed during this turn"*, never *"the agent
-  did this"*.
-
----
-
-## 3. Keel itself
-
-Opens on ⌘J. Escape closes. Opens on the **last completed turn**, not on a file:
-the panes already do files well, and do this not at all.
-
-Structure follows `2c` from the handoff — contract-first review — with the parts
-that require infrastructure we do not have removed rather than faked.
-
-**Header.** Task, files touched, elapsed, cost.
-
-**Two summary boxes.**
-- *Checked* — intents in play with a mechanism that ran.
-- *Needs your judgment* — flagged clauses, and anything the agent itself said it
-  could not verify. **Capped at three.** More than three means the task was
-  scoped too widely, and the cap is the signal.
-
-**Per file:** path, +/−, what changed. For Python, the before/after **`def`
-signature set** — not a type surface (see §5), and labelled as such. Per-file
-**accept** and **revert** — `applyPatch(cwd, patch, reverse)` already exists
-**[verified: gitWrite.ts:166]**.
-
-**Coverage line, always present:** *"4 of 9 files touch a known intent. 5
-unchecked."* This is the honest one. It does not say safe; it says nothing was
-looking.
-
-**Constraint log.** Every accept/reject appends a line the agent reads on its
-next task. Cheap, and it is the compounding mechanism — it is how the system
-learns your taste without anything being retrained. Stored per repository
-identity under `~/.fove/`, alongside the intents and for the same reason: it is
-your judgment about someone else's codebase, and it stays on your machine.
-
----
-
-## 4. Order
-
-1. **Turn boundary** (§2). Deterministic; nothing works without it.
-2. **Five intents from `AGENTS.md`**, prose only, plus two mechanisms
-   (`print()` and ES-sync pairing — both **[verified]** as real and checkable).
-   Prove the format survives contact before writing fifty.
-3. **Keel overlay** (§3) showing the change set, grouped by intent where one
-   applies, explicitly *unchecked* where none does.
-4. **Constraint log.**
-5. **Discriminator** — only after 1–4 are honest. It is more useful with a
-   deterministic floor underneath it, and its best output is not a verdict but
-   *"this clause applies and has no mechanism"*, which is what tells you where
-   to write the next one.
-
-**The checkpoint that matters:** after step 3, hand a real task to an agent in
-`core` and use Keel on it. Then count. Every time you close Keel and go to the
-panes because it confused you, that is the number the whole design is competing
-with — and it should be logged, not remembered.
-
----
-
-## 5. From the handoff: what is not being built, and why
-
-The Keel design assumes a codebase this one is not. Measured, not guessed:
-
-| Design dependency | Reality in `core` |
+| Module | What it answers |
 |---|---|
-| `.intent` sibling per file | **0 exist** across 2,571 Python files **[verified]** |
-| Contract extracted at build | ~~Blocked~~ — **wrong, and corrected.** 39% of defs carry return annotations, but the *exported surface* comes from the AST regardless: **120/120 sampled files parse, 75% have a public surface** **[verified]**. A partial contract is still a contract. |
-| Invariants `proven` per build | Needs a clause→mechanism index that does not exist |
-| Telemetry keyed by file path | Sentry is per-exception; nothing keys metrics to paths **[verified]** |
-| Shadow run against mirrored traffic | Infrastructure that does not exist and is not fove's to build |
+| `shared/turns.ts` | Where does one turn end and the next begin? |
+| `shared/changeset.ts` | What moved on disk *during this turn*, versus what was already dirty? |
+| `main/snapshots.ts` | What did the tree look like before the agent started? |
+| `main/contract.ts` | What is this file's public surface? |
+| `shared/worklist.ts` | What deserves attention first? |
+| `shared/intents.ts` | Which rules must stay true, and did they? |
 
-Two consequences worth stating plainly rather than discovering later:
+`--json-schema` is the single feature the whole loop rests on: it returns a
+**validated, typed object** in `structured_output`, which makes a plan data
+rather than prose to scrape. Checked against the installed CLI before being
+designed around, not assumed from the help text — along with
+`--permission-mode`, `--max-budget-usd`, and the `session_id` that lets later
+phases resume the same conversation.
 
-**Rule 6 of the handoff — shadow execution as a precondition for filing a
-claim — cannot be honoured.** Honoured literally, no claim is ever filed and the
-review screen is dead. Dropped, `2c` loses its strongest guarantee. We drop it
-and say so: Keel reviews *changes*, not *proofs*.
+### Intents
 
-**Rule 2 — "a card is generated, never authored" — holds after all.**
-An earlier version of this document called it blocked on a type surface Python
-could not give. That was wrong: `ast` yields names, parameters and whatever
-annotations exist, deterministically, on every file that parses. Cards will
-often sit in the handoff's *no intent / inferred* state, but the design already
-specifies that state — treating it as an edge case to avoid, rather than as the
-honest default, was the actual error.
+A rule about the codebase, in English, that must stay true. Not what the code
+does — that is documentation, and it rots — but what it must never stop doing.
 
-**Rule 3 — no editor in the resting layout — is deliberately not adopted.** The
-overlay decision in §0 makes it unnecessary: the editor stays, Keel is what you
-open. The handoff states rule 3 as a bet and says telemetry should settle it.
-We have no telemetry, and the editor is what is being used today.
+They live in `~/.fove/intents/<identity>`, **not in the repository**, because
+your rules are yours: *"my test and my rules should live with me, I cannot force
+these onto a production repo ever."* Identity is the remote URL where one
+exists, else `--git-common-dir`, so every worktree of a repository shares one
+intent store.
 
-**`4a` is being built** — it is the handoff's own step 1, *"everything else
-hangs off the card component"*, and it is what makes a handoff trustable rather
-than merely reviewable. Its tree and agent rail need nothing new; its file card
-needs the AST contract above and degrades honestly where there is no intent.
+Mechanisms come first and judgment second, and they are never merged into a
+single "looks good": a mechanism is a search and gives a verdict that does not
+depend on anyone's opinion; the review is a judgment and is labelled as one.
 
-**Not built: `2b`**, the relationship navigator — an explicit alternative to
-`4a` in the handoff, not an addition. Ship one.
+### The UI sweep that gated the release
 
-**Not built: `2e`**, the live view. It needs telemetry keyed by file path and
-there is none. The stats rail is the right eventual home for it.
+Four reported problems, three of which were not what they looked like. Recorded
+in `f55966c`; the short version:
 
-**`3a` is a pitch artifact**, not a product surface — the handoff says so
-itself. If it is wanted, it belongs in a README.
+- **Search** was answering the wrong question, not failing. It searched contents
+  only, so a filename query found nothing. It searches names now.
+- **The debugger worked.** The target app crashed on import because `core`'s
+  `launch.json` sets no `ENVIRONMENT`; fove showed a bare `terminated` and
+  dropped the reason, so the program's crash read as a broken debugger.
+- **The editor popout** reset because `openPath` was only ever written by the
+  palette route, so opening a file from the tree was invisible to the layout.
+- **Panes overflowed** because a flex child with `overflow: auto` will not
+  scroll without `min-height: 0`. Seven containers had that shape, including
+  both Keel sheets.
+
+Measured via CDP against the running app at four window sizes: the toolbar was
+2007px wide in a 1440px window, the tab bar hid 567px. Now zero clipped
+elements down to 760×520.
+
+**455 → 621 tests.**
 
 ---
 
-## 6. Honest risks
+## 2. The loop, running
 
-- **The 95% target is the right aim and the wrong assumption.** At 20 changes a
-  day, 95% is one bad merge daily. The coverage line in §3 exists so the
-  uncovered changes get your eyes rather than your trust, and the number gets
-  measured rather than asserted.
-- **The discriminator will miss things, and its misses cluster where the code is
-  subtle** — which is where you needed it. This is why *unchecked* never renders
-  green.
-- **Intents can rot like any documentation.** A prose intent that no mechanism
-  checks and no agent flags is a comment. The flag-count-to-mechanism pipeline
-  in §1 is the only thing keeping the set alive.
-- **Keel could become another thing to maintain.** The mitigation is that it
-  reads what already exists — git, the transcript, `AGENTS.md` — and authors
-  nothing that has to be kept in sync by hand.
+On a scratch Flask repository, through the UI, end to end. Not a rehearsal —
+this is what the release criterion asked for.
+
+**Plan** → `awaiting-approval`, 2 steps, 5 risks, working tree untouched. The
+plan had read the repo's `AGENTS.md` and planned *around* it:
+
+> *"AGENTS.md requires every route to declare its methods explicitly, so the
+> decorator passes `methods=['GET']`"*
+
+The code it later wrote does exactly that. The intent shaped the output rather
+than being checked after the fact, which is the whole argument for sending
+intents at plan time.
+
+**The "only you can decide" box** caught something no test would ask:
+
+> *"`charge()` returns `jsonify(ok=True)` → `{"ok": true}`, while the task
+> specifies `{status: ok}`. I followed the task, but if the repo has an unwritten
+> envelope convention, this route breaks it."*
+
+**Approve → execute → check → ready.** Four findings, including one against its
+own work:
+
+> *"Change is entirely unverified — never executed once."*
+
+Total: $0.95 of usage. Changes left uncommitted, as designed.
+
+### On that number
+
+It is **not a bill.** This machine authenticates by OAuth with no API key, so
+`total_cost_usd` is what those tokens would have cost at API rates — a usage
+proxy on a subscription. The UI said *"stop after 5 dollars"*, which was a lie
+and is now *"stop after 5 units of usage · runs on your Claude subscription —
+the cap is a ceiling on how much work a runaway task may do, not a bill."*
+
+---
+
+## 3. What the running UI caught that 32 data-layer tests did not
+
+Worth its own section, because it happened again and the lesson is the same one
+v0.8 recorded.
+
+- a committed-clean file rendered as NEW
+- an untracked file that moved again rendered as EDITED
+- `<task-notification>` leaking into visible history
+- a fresh session showing "no turns" while a 153-turn session existed
+- a loop sitting at its gate rendering as idle after a reload
+- the approve button below a five-paragraph risks box, off the bottom of the rail
+
+Nine spurious "running" turns were also found only by running against real
+transcripts — all of them `/compact` machinery.
+
+**Verify against the running app, not just tests.** Third release in a row that
+this rule has paid for itself.
+
+---
+
+## 4. Where the original plan was wrong
+
+Recorded rather than tidied away.
+
+- **"`4a` is blocked — Python won't give us a type surface at 39% annotation."**
+  Wrong, and corrected under challenge. An AST gives the public surface
+  regardless of annotations. Measured afterwards: **120/120 files parse, 75%
+  have a public surface**, median 2 entries, p90 14, max 107. `4a` shipped.
+
+- **"Self-reported intent coverage is a model grading itself."** Also wrong, and
+  the correction was the user's: *"that is asking another agent to check whether
+  the first agent is correct or not… either way it's a second agent acting as a
+  discriminator to the first agent."* Discrimination is not self-grading, and
+  the check phase is built as the former.
+
+- **A constraint attributed to the user that they never stated.** They said Keel
+  should be *closeable*. I recorded *small*, and built to it. Caught by them, not
+  by me.
+
+The pattern across all three: the plan was most wrong where it reasoned about
+the work instead of measuring it.
+
+---
+
+## 5. Carried to v1
+
+- **Layout and UI changes** — explicitly deferred by the user at release:
+  *"we might have some layout changes and bug changes we do later."*
+- **The stale preset label** — `preset` is one app-level value while layouts are
+  per-tab, so the toolbar can read "Lite" over four panes. Cosmetic, known,
+  untouched.
+- **`2e` live view** — skipped by decision. It is what the stats rail becomes.
+- **`2b` relationship navigator** — the handoff calls it an alternative to `4a`,
+  and `4a` shipped.
+- **Browser auto-reload on save** — watcher and `reload()` both exist; only the
+  trigger is missing.
+- **Test → debugger in one click.** Precondition still unmet: `aipenv`, the 3.10
+  env matching `core`'s Flask config, still has no `debugpy`.
+- **Code-splitting** — still a 4.6MB single chunk.
+- Per-hunk staging, palette files+sessions, conditional breakpoints.
 
 ---
 
@@ -330,7 +227,8 @@ itself. If it is wanted, it belongs in a README.
 
 - Never test against real repos; disposable fixtures only.
 - `~/.claude.json` is read-only, permanently.
+- Your rules live with you, never forced onto a production repository.
 - Prove tricky logic as a pure module before wiring a UI.
-- **Verify against the running app, not just tests.** v0.7's sharpest bug passed
-  every unit test and appeared only against real debugpy.
-- Check *which directory* a "not found" came from before calling it a bug.
+- Mechanisms and judgment stay labelled as different things.
+- The loop ends at *ready to review*, never at *merged*.
+- **Verify against the running app, not just tests.**
