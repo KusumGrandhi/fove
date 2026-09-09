@@ -399,17 +399,37 @@ describe("spawn environment", () => {
       const s = svc.spawn({
         paneId: "envtest",
         cmd: "/bin/sh",
-        args: ["-c", "env; sleep 0.2"],
+        // The sentinel is echoed after env, so the reader knows the whole
+        // environment has arrived rather than guessing from a variable name --
+        // env's output spans several writes and is not ordered.
+        args: ["-c", "env; echo __FOVE_ENV_END__; sleep 0.2"],
         cols: 80, rows: 24,
         env: { CLAUDE_CODE_SSE_PORT: "1234", ENABLE_IDE_INTEGRATION: "true" },
       });
       const seen = await new Promise<string>((resolve) => {
         let acc = "";
-        s.proc.onData((d: string) => { acc += d; });
-        // Commands now run through a login+interactive shell, which sources the
-        // user's whole profile before exec'ing -- slower to first output than a
-        // bare spawn.
-        setTimeout(() => resolve(acc), 3000);
+        /*
+         * Resolve as soon as the marker arrives; the timeout is a backstop.
+         *
+         * Commands run through a login+interactive shell, which sources the
+         * user's whole profile before exec'ing -- slower to first output than
+         * a bare spawn, and slower still under full-suite load. A fixed wait
+         * failed roughly 1 run in 14 there while passing alone, which makes
+         * every future failure ambiguous.
+         *
+         * The sentinel the command echoes after `env` is the only reliable
+         * "output complete" signal: env's variables span several writes and
+         * arrive in no particular order, so waiting on any one of them can
+         * resolve on a partial read.
+         */
+        const timer = setTimeout(() => resolve(acc), 15000);
+        s.proc.onData((d: string) => {
+          acc += d;
+          if (acc.includes("__FOVE_ENV_END__")) {
+            clearTimeout(timer);
+            resolve(acc);
+          }
+        });
       });
       svc.kill("envtest");
 
