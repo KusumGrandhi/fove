@@ -123,6 +123,47 @@ export function Keel(props: {
   const changed = review?.changes?.changed ?? [];
   const carried = review?.changes?.carried ?? [];
 
+  const [reverting, setReverting] = useState(false);
+  const [revertError, setRevertError] = useState<string | null>(null);
+
+  /**
+   * Undo this turn's work, and only this turn's.
+   *
+   * The path list comes from `changed`, never from git status: a file that was
+   * already dirty when the turn began is someone else's work in progress, and
+   * discarding it here would destroy edits this screen explicitly says the
+   * turn did not make.
+   *
+   * Confirmed first, because it is not undoable by anything fove offers.
+   */
+  const revert = async (): Promise<void> => {
+    const paths = changed.map((f) => f.path);
+    if (paths.length === 0) return;
+    const ok = window.confirm(
+      `Discard changes to ${paths.length} file${paths.length === 1 ? "" : "s"}?\n\n`
+      + paths.slice(0, 12).join("\n")
+      + (paths.length > 12 ? `\n…and ${paths.length - 12} more` : "")
+      + "\n\nThis cannot be undone.",
+    );
+    if (!ok) return;
+
+    setReverting(true);
+    setRevertError(null);
+    try {
+      const r = await window.th.gitDiscard(props.cwd, paths) as
+        { ok?: boolean; stderr?: string } | undefined;
+      if (r && r.ok === false) {
+        setRevertError(r.stderr?.trim() || "git could not discard those files");
+      } else {
+        props.onRefresh();
+      }
+    } catch (e) {
+      setRevertError((e as Error).message);
+    } finally {
+      setReverting(false);
+    }
+  };
+
   return (
     <div style={S.backdrop} onMouseDown={(e) => { if (e.target === e.currentTarget) props.onClose(); }}>
       <div style={S.card} ref={hostRef} tabIndex={-1}>
@@ -240,20 +281,41 @@ export function Keel(props: {
                   </section>
                 )}
 
-                {/* --- action row --- */}
-                <div style={S.actions}>
-                  <button style={S.primary} disabled>Accept and merge</button>
-                  <button style={S.secondary} disabled>Revert everything this turn touched</button>
-                  <span style={{ flex: 1 }} />
-                  {/*
-                    * Both actions are deliberately inert: `applyPatch` exists
-                    * but is not wired, and a button that looks live and does
-                    * nothing is worse than one that says why.
-                    */}
-                  <span style={{ ...TYPE.body115, color: STATE.warn }}>
-                    not wired yet — lands with intents
-                  </span>
-                </div>
+                {/*
+                  * --- action row ---
+                  *
+                  * There is no "accept and merge", and there never will be.
+                  * The loop ends at *ready to review*: Keel assembles the
+                  * evidence and the judgment stays yours, so a button here
+                  * that merges would contradict the one property the whole
+                  * design is built on. Accepting means committing, which the
+                  * git pane already does with a message you write.
+                  *
+                  * Revert is offered because undoing a turn you did not want
+                  * is the action you need *from this screen*, while you are
+                  * looking at what it did.
+                  */}
+                {changed.length > 0 && (
+                  <div style={S.actions}>
+                    <button
+                      style={S.secondary}
+                      onClick={() => void revert()}
+                      disabled={reverting}
+                      title={changed.map((f) => f.path).join("\n")}
+                    >
+                      {reverting
+                        ? "reverting…"
+                        : `Revert the ${changed.length} file${changed.length === 1 ? "" : "s"} this turn touched`}
+                    </button>
+                    <span style={{ flex: 1 }} />
+                    <span style={{ ...TYPE.body115, color: INK.i5 }}>
+                      Files already dirty before the turn are left alone.
+                    </span>
+                  </div>
+                )}
+                {revertError && (
+                  <div style={{ ...TYPE.body115, color: STATE.warn }}>{revertError}</div>
+                )}
               </>
             )}
 
@@ -465,11 +527,6 @@ const S: Record<string, React.CSSProperties> = {
   },
 
   actions: { display: "flex", gap: 8, alignItems: "center", paddingTop: 4, flexWrap: "wrap" },
-  primary: {
-    height: 36, padding: "0 18px", border: "none", borderRadius: 8,
-    background: BRAND.brand, color: INK.i1, ...TYPE.body125, fontWeight: 500,
-    cursor: "not-allowed", boxShadow: SHADOW.brand, opacity: 0.45,
-  },
   secondary: {
     height: 36, padding: "0 16px", borderRadius: 8,
     border: `1px solid ${BORDER.b2}`, background: "transparent", color: INK.i2,

@@ -150,10 +150,41 @@ export class GitWriteService {
   /**
    * Discard working-tree changes to paths. Destructive and unrecoverable —
    * the caller must confirm before calling.
+   *
+   * Tracked and untracked paths need different commands, and mixing them in
+   * one `git restore` fails the *whole* call: restore errors with "pathspec
+   * did not match any file(s) known to git" on the first untracked path and
+   * restores none of the tracked ones. That is the worst outcome available --
+   * the user is told nothing happened while believing the turn was reverted --
+   * so they are separated here and both halves are reported.
    */
-  discard(cwd: string, paths: string[]): Promise<GitWriteResult> {
-    if (paths.length === 0) return Promise.resolve({ ok: true, stdout: "", stderr: "" });
-    return gitWrite(cwd, ["restore", "--worktree", "--", ...paths]);
+  async discard(cwd: string, paths: string[]): Promise<GitWriteResult> {
+    if (paths.length === 0) return { ok: true, stdout: "", stderr: "" };
+
+    const tracked: string[] = [];
+    const untracked: string[] = [];
+    for (const p of paths) {
+      // `ls-files --error-unmatch` is the cheap "does git know this path"
+      // question; a non-zero exit means it does not.
+      const known = await gitWrite(cwd, ["ls-files", "--error-unmatch", "--", p]);
+      (known.ok ? tracked : untracked).push(p);
+    }
+
+    const parts: GitWriteResult[] = [];
+    if (tracked.length > 0) {
+      parts.push(await gitWrite(cwd, ["restore", "--worktree", "--", ...tracked]));
+    }
+    if (untracked.length > 0) {
+      // A file the turn created is reverted by deleting it. `-q` keeps the
+      // output quiet; `--` guards a path that begins with a dash.
+      parts.push(await gitWrite(cwd, ["clean", "-fdq", "--", ...untracked]));
+    }
+
+    return {
+      ok: parts.every((r) => r.ok),
+      stdout: parts.map((r) => r.stdout).join(""),
+      stderr: parts.map((r) => r.stderr).filter(Boolean).join("\n"),
+    };
   }
 
   /**

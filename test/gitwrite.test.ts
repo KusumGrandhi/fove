@@ -6,6 +6,7 @@
  */
 import { describe, expect, test, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
@@ -70,6 +71,51 @@ describe("staging", () => {
     await writeFile(join(dir, "a.txt"), "wrecked\n");
     expect((await g.discard(dir, ["a.txt"])).ok).toBe(true);
     expect(await readFile(join(dir, "a.txt"), "utf8")).toBe("one\ntwo\nthree\n");
+  });
+
+  test("discard deletes an untracked file, which restore cannot do", async () => {
+    /*
+     * `git restore` only knows tracked paths. Keel's "revert this turn" hands
+     * it whatever the turn touched, and a turn that *creates* a file is the
+     * normal case -- so without this the revert is a no-op on new files.
+     */
+    await writeFile(join(dir, "brand-new.txt"), "created by the turn\n");
+    expect((await g.discard(dir, ["brand-new.txt"])).ok).toBe(true);
+    expect(existsSync(join(dir, "brand-new.txt"))).toBe(false);
+  });
+
+  test("a mixed list reverts both halves rather than failing whole", async () => {
+    /*
+     * The bug this suite missed. One `git restore` over a mixed list errors on
+     * the first untracked path and restores *none* of the tracked ones -- the
+     * worst outcome available, because the caller is told nothing happened
+     * while believing the work was reverted.
+     */
+    await writeFile(join(dir, "a.txt"), "wrecked\n");
+    await writeFile(join(dir, "also-new.txt"), "new\n");
+
+    const r = await g.discard(dir, ["a.txt", "also-new.txt"]);
+
+    expect(r.ok).toBe(true);
+    expect(await readFile(join(dir, "a.txt"), "utf8")).toBe("one\ntwo\nthree\n");
+    expect(existsSync(join(dir, "also-new.txt"))).toBe(false);
+  });
+
+  test("discard leaves paths it was not given alone", async () => {
+    /*
+     * The safety property Keel depends on: a file already dirty when the turn
+     * began is someone's work in progress, and reverting the turn must not
+     * touch it.
+     */
+    await writeFile(join(dir, "b.txt"), "committed\n");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-qm", "add b"]);
+
+    await writeFile(join(dir, "a.txt"), "turn edit\n");
+    await writeFile(join(dir, "b.txt"), "dirty before the turn\n");
+
+    expect((await g.discard(dir, ["a.txt"])).ok).toBe(true);
+    expect(await readFile(join(dir, "b.txt"), "utf8")).toBe("dirty before the turn\n");
   });
 });
 

@@ -25,7 +25,14 @@ import { KeelHandoff } from "./KeelHandoff.js";
 import type { HandoffState } from "../../shared/handoff.js";
 import type { ContractEntry, FileContract } from "../../main/contract.js";
 
-export interface WorklistWire { files: WorklistFile[]; total: number }
+export interface WorklistWire {
+  files: WorklistFile[];
+  total: number;
+  /** Files that moved in the turn window. Zero means every row is borrowed. */
+  changedCount: number;
+  /** Rows taken from the last commit because the tree was clean. */
+  fromHistory: number;
+}
 export interface CardWire {
   contract: FileContract;
   purpose: string;
@@ -162,9 +169,19 @@ export function KeelWorkspace(props: {
             </div>
 
             <div style={S.treeNote}>
+              {/*
+                * Say where these rows came from.
+                *
+                * The previous wording claimed a ranking in every case. On a
+                * clean repository nothing had been ranked at all -- every row
+                * was borrowed from git history and shown as though it were the
+                * turn's work, which is the one thing this column must not do.
+                */}
               {needing > 0
                 ? `${needing} of ${props.worklist?.total ?? 0} changed during this turn. Ranked by attention, not name.`
-                : "Ranked by attention, not name. Failing and drifted need intents, which do not exist yet."}
+                : (props.worklist?.fromHistory ?? 0) > 0
+                  ? "Nothing has changed yet. Showing your last commit, so this is history, not this turn's work."
+                  : "Nothing has changed yet."}
             </div>
           </aside>
 

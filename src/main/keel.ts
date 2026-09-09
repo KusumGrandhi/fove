@@ -148,7 +148,7 @@ export class KeelService {
    */
   async worklist(cwd: string): Promise<Worklist> {
     const now = await takeSnapshot(cwd);
-    if (!now) return { files: [], total: 0 };
+    if (!now) return { files: [], total: 0, changedCount: 0, fromHistory: 0 };
 
     const opening = this.snapshots.opening(cwd);
     const changedInTurn = new Set<string>();
@@ -169,29 +169,48 @@ export class KeelService {
     });
 
     /*
-     * Recently committed files, so a clean repository still has a worklist.
+     * The last commit's files, and only when nothing is uncommitted.
      *
-     * Built from uncommitted files alone, this column was empty on `core` --
-     * which is clean -- and an empty tree makes the whole left column useless
-     * exactly when you have just finished something. Recent commits are what
-     * you were working on, and that is the question the column answers.
+     * This column answers "what is this turn's work", so borrowed history is a
+     * fallback for one case: a clean tree, where the work you just finished is
+     * the commit you just made.
+     *
+     * The first version asked for 15 commits by anyone, which on a shared
+     * repository is not a fallback but a firehose -- measured on `core`: 60
+     * rows, 0 of them changed, every one from nine other people's merges,
+     * presented as your worklist. One commit, and only when there is nothing
+     * else to show, is the most that can honestly be called your work.
      */
-    const seen = new Set(files.map((f) => f.path));
-    for (const path of await this.recentlyCommitted(cwd)) {
-      if (seen.has(path)) continue;
-      seen.add(path);
-      files.push({ path, tone: "normal", badge: "recent" });
+    const fromHistory = files.length === 0 ? await this.lastCommitFiles(cwd) : [];
+    for (const path of fromHistory) {
+      files.push({ path, tone: "normal", badge: "last commit" });
     }
 
-    return { files: byAttention(files), total: files.length };
+    return {
+      files: byAttention(files),
+      total: files.length,
+      // The renderer must not describe borrowed history as this turn's work.
+      changedCount: changedInTurn.size,
+      fromHistory: fromHistory.length,
+    };
   }
 
-  /** Paths touched by the last handful of commits, newest first. */
-  private async recentlyCommitted(cwd: string, limit = 15): Promise<string[]> {
+  /**
+   * Paths in the most recent commit, newest first.
+   *
+   * One commit, not a handful: this is the "you just committed and the tree is
+   * clean" case, and the commit you just made is the only history that can
+   * honestly be called the work you were doing. Anything further back is a
+   * changelog, and on a shared repository it is mostly other people's.
+   *
+   * Capped, because a merge or a formatting sweep can touch hundreds of files
+   * and this is a worklist column, not a file browser.
+   */
+  private async lastCommitFiles(cwd: string, cap = 20): Promise<string[]> {
     try {
       const { stdout } = await execFileP(
         "git",
-        ["log", `-${limit}`, "--name-only", "--format=", "--diff-filter=d"],
+        ["log", "-1", "--name-only", "--format=", "--diff-filter=d"],
         { cwd, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
       );
       const out: string[] = [];
@@ -201,8 +220,7 @@ export class KeelService {
         if (!p || seen.has(p)) continue;
         seen.add(p);
         out.push(p);
-        // A card column is not a file browser; past a point this is noise.
-        if (out.length >= 60) break;
+        if (out.length >= cap) break;
       }
       return out;
     } catch {
@@ -301,4 +319,14 @@ export interface Worklist {
   files: WorklistFile[];
   /** Total files considered, so the header can say "4 of 312". */
   total: number;
+  /**
+   * How many files actually moved during the turn window.
+   *
+   * Distinct from `total`, and the distinction is the point: on a clean tree
+   * every row is borrowed from the last commit, and describing those as this
+   * turn's work is a lie the UI would tell confidently.
+   */
+  changedCount: number;
+  /** How many rows came from the last commit rather than the working tree. */
+  fromHistory: number;
 }
