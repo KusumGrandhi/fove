@@ -21,18 +21,27 @@ let bin: string;
 let repo: string;
 let originalPath: string | undefined;
 
-/** A `claude` that always returns a usable result for whatever it is asked. */
+/**
+ * A `claude` that answers whatever it is asked.
+ *
+ * Agents return their answer by *writing a file* now, not through
+ * `structured_output` -- that returns null under `--agent`, measured against
+ * the installed CLI. So the fake finds the path in the prompt and writes to
+ * it, which is exactly what the real agents are told to do.
+ */
 function fakeClaude(): void {
   const p = join(bin, "claude");
   writeFileSync(p, `#!/bin/sh
-case "$*" in
-  *json-schema*findings*)
-    echo '{"is_error":false,"structured_output":{"findings":[]},"total_cost_usd":0.1}' ;;
-  *json-schema*)
-    echo '{"is_error":false,"structured_output":{"summary":"do it","steps":[{"n":1,"action":"edit"}]},"total_cost_usd":0.1,"session_id":"s1"}' ;;
-  *)
-    echo '{"is_error":false,"result":"done","total_cost_usd":0.2,"session_id":"s1"}' ;;
-esac
+OUT=$(printf '%s\n' "$@" | grep -o '/[^ ]*\.json' | tail -1)
+if [ -n "$OUT" ]; then
+  mkdir -p "$(dirname "$OUT")"
+  case "$OUT" in
+    *plan.json)   echo '{"summary":"do it","steps":[{"n":1,"action":"edit"}]}' > "$OUT" ;;
+    *review.json) echo '{"findings":[]}' > "$OUT" ;;
+    *drift.json)  echo '{"violations":[]}' > "$OUT" ;;
+  esac
+fi
+echo '{"is_error":false,"result":"done","total_cost_usd":0.2,"session_id":"s1"}'
 `);
   chmodSync(p, 0o755);
 }

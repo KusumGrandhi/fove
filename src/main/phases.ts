@@ -14,7 +14,7 @@
 import { join } from "node:path";
 import type { Plan, CheckResult } from "../shared/handoff.js";
 import { runAgent, type AgentResult } from "./agentRunner.js";
-import { PLANNER, EXECUTOR, REVIEWER } from "./agentFiles.js";
+import { PLANNER, EXECUTOR, REVIEWER, DRIFT } from "./agentFiles.js";
 
 export interface PhaseOptions {
   cwd: string;
@@ -134,6 +134,73 @@ export async function execute(
     timeoutMs: opts.timeoutMs,
     onOutput: opts.onOutput,
   });
+}
+
+/** One rule the change was judged to break. */
+export interface DriftViolation {
+  intentId: string;
+  /** Clause number within that intent, e.g. "01". */
+  clause: string;
+  file: string;
+  /** The line or construct that breaks it, quoted. */
+  evidence: string;
+  /** False when the reviewer was inferring rather than reading a clear breach. */
+  confident?: boolean;
+}
+
+/**
+ * Ask whether the change breaks a rule the repository wrote down.
+ *
+ * Separate from `review` and run after it, because they answer different
+ * questions: that one asks whether the change is any good, this asks whether
+ * it breaks something you decided in advance. Merging them would let a strong
+ * opinion about code quality arrive wearing the authority of your own rule.
+ *
+ * The agent reads the diff from the tree itself rather than being handed it,
+ * which is why it has `git diff`: passing 60kB of diff through a prompt was
+ * the v0.9 approach and truncates on exactly the large change most worth
+ * checking.
+ */
+export async function drift(
+  intents: IntentBrief[],
+  opts: PhaseOptions,
+): Promise<{ violations: DriftViolation[]; costUSD: number; error?: string }> {
+  if (intents.length === 0) return { violations: [], costUSD: 0 };
+
+  const outputPath = join(opts.runDir, "drift.json");
+
+  const r = await runAgent<{ violations?: DriftViolation[] }>({
+    agent: DRIFT,
+    cwd: opts.cwd,
+    prompt: [
+      "Judge the uncommitted change in this working tree against these rules.",
+      "Read the diff with `git diff` and `git status`.",
+      "",
+      "RULES",
+      ...intents.flatMap((i) => [
+        `[${i.id}] ${i.headline}`,
+        ...i.clauses.map((c) => `  ${c.num ?? "01"} ${c.name}: ${c.text}`),
+      ]),
+      "",
+      `Write your verdict to ${outputPath}`,
+    ].join("\n"),
+    outputPath,
+    allowedTools: [
+      "Read", "Grep", "Glob", "Write",
+      "Bash(git diff:*)", "Bash(git status:*)", "Bash(git log:*)",
+    ],
+    permissionMode: "acceptEdits",
+    budgetUSD: opts.budgetUSD,
+    signal: opts.signal,
+    timeoutMs: opts.timeoutMs,
+    onOutput: opts.onOutput,
+  });
+
+  return {
+    violations: r.output?.violations ?? [],
+    costUSD: r.costUSD,
+    error: r.ok ? undefined : r.error,
+  };
 }
 
 /**

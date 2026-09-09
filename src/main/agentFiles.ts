@@ -19,15 +19,19 @@ import { join } from "node:path";
 export const PLANNER = "fove-planner";
 export const EXECUTOR = "fove-executor";
 export const REVIEWER = "fove-reviewer";
+export const DRIFT = "fove-drift";
 
 /**
  * The planner.
  *
  * Cannot run in `--permission-mode plan`, which was the v0.9 safety property:
  * measured against the installed CLI, plan mode blocks `Write` even when the
- * agent declares it, so a planner that must write its plan cannot use it. The
- * property instead comes from `--allowed-tools "Write(<the plan file>)"` --
- * one path, and the working tree afterwards proves it held.
+ * agent declares it, so a planner that must write its plan cannot use it.
+ *
+ * Nor can the write be scoped to one path -- `--allowed-tools "Write(<path>)"`
+ * grants nothing, denied even when the requested path is byte-identical. What
+ * restrains it is therefore the instruction below plus fove's snapshot, which
+ * says afterwards whether anything else moved.
  */
 const PLANNER_MD = `---
 name: ${PLANNER}
@@ -149,10 +153,58 @@ If you genuinely find nothing, return one finding with \`passed: true\` saying
 so. Inventing a problem to look useful makes every real finding worth less.
 `;
 
+/**
+ * The drift reviewer.
+ *
+ * Separate from the general reviewer because the questions differ: that one
+ * asks "is this change any good", this asks "does it break a rule you wrote
+ * down". Merging them would let a strong opinion about code quality arrive
+ * wearing the authority of a rule you actually wrote.
+ */
+const DRIFT_MD = `---
+name: ${DRIFT}
+description: >
+  Judges whether a change breaks rules the codebase has written down, and
+  writes its verdict as JSON.
+tools: Read, Grep, Glob, Bash, Write
+---
+
+You are reviewing someone else's change against rules this codebase must keep
+true. You did not write the change.
+
+This is the distinction that makes the job worth doing: a model asked "did you
+follow the rules?" is grading its own homework. You are reading a diff you did
+not produce, against a list you did not write, which is ordinary review work.
+
+**The only file you may write is the verdict file you are given.** Never edit
+the code you are reviewing.
+
+Write your verdict as JSON:
+
+    {
+      "violations": [
+        { "intentId": "the-rule-id", "clause": "01", "file": "path/to/file",
+          "evidence": "the exact line or construct that breaks it",
+          "confident": true }
+      ]
+    }
+
+Quote the code. A claim with no evidence is worse than no claim, because
+someone has to go and check it either way.
+
+Set \`confident\` to false when the rule is ambiguous, or when you are inferring
+intent rather than reading a clear breach. Say so rather than rounding up.
+
+**Report nothing if nothing is broken.** An empty list is the expected answer
+for most changes. Inventing a violation to look useful makes every real one
+worth less, and a badge that fires on everything is worth nothing.
+`;
+
 const FILES: [string, string][] = [
   [`${PLANNER}.md`, PLANNER_MD],
   [`${EXECUTOR}.md`, EXECUTOR_MD],
   [`${REVIEWER}.md`, REVIEWER_MD],
+  [`${DRIFT}.md`, DRIFT_MD],
 ];
 
 /** Where a workspace's agent definitions live. Claude Code resolves these. */

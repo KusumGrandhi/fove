@@ -1,7 +1,7 @@
 /**
  * Running the handoff loop, per workspace.
  *
- * `shared/handoff.ts` is the state machine and `handoffRunner.ts` drives
+ * `shared/handoff.ts` is the state machine and `phases.ts` drives
  * `claude`; this owns the running loop -- one per workspace, its state pushed
  * to the renderer as it changes.
  *
@@ -15,18 +15,21 @@
  */
 
 import { EventEmitter } from "node:events";
-import { spawn } from "node:child_process";
 import {
   initial, reduce, mayExecute,
   type HandoffState, type HandoffEvent, type CheckResult,
 } from "../shared/handoff.js";
-import { HandoffRunner, type DriftViolation } from "./handoffRunner.js";
+import * as phases from "./phases.js";
+import type { DriftViolation } from "./phases.js";
+import { makeRunDir } from "./agentRunner.js";
+import { installAgents } from "./agentFiles.js";
 import { IntentStore } from "./intentStore.js";
 import { SnapshotStore, takeSnapshot } from "./snapshots.js";
 import { compareSnapshots } from "../shared/changeset.js";
 
 export class HandoffService extends EventEmitter {
-  private readonly runner = new HandoffRunner();
+  /** Where each workspace's current run keeps its artifacts. */
+  private readonly runDirs = new Map<string, string>();
   private readonly states = new Map<string, HandoffState>();
   /** Abort handles, so a stop actually kills the child process. */
   private readonly aborts = new Map<string, AbortController>();
@@ -143,16 +146,22 @@ export class HandoffService extends EventEmitter {
       clauses: i.clauses.map((c) => ({ name: c.name, text: c.text })),
     }));
 
-    const r = await this.runner.plan(ticket, forPrompt, {
-      cwd, budgetUSD, signal: abort.signal,
+    // The agent definitions must exist before an agent can be named. Never
+    // overwrites: once you have edited one it is yours.
+    await installAgents(cwd);
+    const runDir = await makeRunDir(cwd);
+    this.runDirs.set(cwd, runDir);
+
+    const r = await phases.plan(ticket, forPrompt, {
+      cwd, runDir, budgetUSD, signal: abort.signal,
     });
 
-    if (!r.plan) {
+    if (!r.output) {
       this.apply(cwd, { type: "failed", reason: r.error ?? "planning produced no plan" });
       return;
     }
     this.apply(cwd, {
-      type: "planned", plan: r.plan, sessionId: r.sessionId, costUSD: r.costUSD,
+      type: "planned", plan: r.output, sessionId: r.sessionId, costUSD: r.costUSD,
     });
   }
 
@@ -180,10 +189,12 @@ export class HandoffService extends EventEmitter {
     this.drifted.delete(cwd);
     this.startWatching(cwd);
 
-    const exec = await this.runner.execute(approved.plan, {
-      cwd,
+    const runDir = this.runDirs.get(cwd) ?? await makeRunDir(cwd);
+    this.runDirs.set(cwd, runDir);
+
+    const exec = await phases.execute(approved.ticket, approved.plan, {
+      cwd, runDir,
       budgetUSD: approved.budgetUSD,
-      sessionId: approved.sessionId,
       signal: abort.signal,
     });
 
@@ -215,44 +226,6 @@ export class HandoffService extends EventEmitter {
     await this.check(cwd, executed);
   }
 
-  /**
-   * The raw diff for the files a turn touched, for the drift reviewer.
-   *
-   * Both halves matter: `git diff` covers edits to tracked files, and
-   * `--no-index /dev/null <path>` is the only way to show a file the turn
-   * *created*, which is otherwise invisible to diff and is exactly where a new
-   * rule violation is most likely to be introduced.
-   */
-  private async diffFor(cwd: string, paths: string[]): Promise<string> {
-    if (paths.length === 0) return "";
-    const run = (args: string[]): Promise<string> =>
-      new Promise((resolve) => {
-        const child = spawn("git", args, { cwd, windowsHide: true });
-        let out = "";
-        child.stdout.on("data", (c: Buffer) => {
-          // A generated file can be enormous; the reviewer cannot use it all.
-          if (out.length < 200_000) out += c.toString();
-        });
-        child.on("error", () => resolve(""));
-        // `--no-index` exits 1 when files differ, which is the normal case.
-        child.on("close", () => resolve(out));
-      });
-
-    const tracked = await run(["diff", "--no-color", "--no-ext-diff", "-M", "--", ...paths]);
-
-    // Untracked files produce nothing above, so they are diffed against
-    // /dev/null one at a time.
-    const untracked = await run(["ls-files", "--others", "--exclude-standard", "--", ...paths]);
-    const news: string[] = [];
-    for (const path of untracked.split("\n").map((s) => s.trim()).filter(Boolean)) {
-      news.push(await run([
-        "diff", "--no-color", "--no-ext-diff", "--no-index", "--", "/dev/null", path,
-      ]));
-    }
-
-    return [tracked, ...news].filter(Boolean).join("\n");
-  }
-
   /** Run mechanisms and an adversarial review over what changed. */
   private async check(cwd: string, state: HandoffState): Promise<void> {
     const pair = await this.snapshots.end(cwd);
@@ -269,19 +242,36 @@ export class HandoffService extends EventEmitter {
 
     const abort = this.aborts.get(cwd) ?? new AbortController();
 
-    let checks: CheckResult[] = [];
+    const runDir = this.runDirs.get(cwd) ?? await makeRunDir(cwd);
+    this.runDirs.set(cwd, runDir);
+
+    /*
+     * Mechanisms first, and separately from the review.
+     *
+     * A mechanism is a search: it gives a verdict that does not depend on
+     * anyone's judgment. The review is a judgment. They are never merged into
+     * a single "looks good", and the UI labels them differently for the same
+     * reason.
+     */
+    const checks: CheckResult[] = [];
+    for (const m of mechanisms) {
+      const r = await this.intents.runMechanism(cwd, m.command);
+      checks.push({
+        kind: "mechanism",
+        label: m.label,
+        passed: r.passed,
+        detail: r.passed ? undefined : r.output.slice(0, 400),
+      });
+    }
+
     try {
-      const r = await this.runner.check(
-        changed,
-        mechanisms,
-        (command) => this.intents.runMechanism(cwd, command),
-        { cwd, budgetUSD: state.budgetUSD, sessionId: state.sessionId, signal: abort.signal },
-      );
-      checks = r.checks;
+      const r = await phases.review(changed, {
+        cwd, runDir, budgetUSD: state.budgetUSD, signal: abort.signal,
+      });
+      checks.push(...r.checks);
     } catch {
       // A failed review must not lose the work. Reaching `ready` with no
       // checks is honest -- and the UI says nothing checked it.
-      checks = [];
     }
 
     /*
@@ -294,14 +284,13 @@ export class HandoffService extends EventEmitter {
      * the checks still stand.
      */
     try {
-      const diff = await this.diffFor(cwd, changed);
       const forReview = stored.intents.map((i) => ({
         id: i.id,
         headline: i.headline,
         clauses: i.clauses.map((c) => ({ num: c.num, name: c.name, text: c.text })),
       }));
-      const d = await this.runner.drift(diff, forReview, {
-        cwd, budgetUSD: state.budgetUSD, signal: abort.signal,
+      const d = await phases.drift(forReview, {
+        cwd, runDir, budgetUSD: state.budgetUSD, signal: abort.signal,
       });
 
       this.drifted.set(cwd, d.violations);
@@ -335,20 +324,25 @@ export class HandoffService extends EventEmitter {
     this.aborts.set(cwd, abort);
 
     const stored = await this.intents.load(cwd);
-    const r = await this.runner.plan(
+    // A fresh run directory: the rejected plan stays on disk under the old
+    // one, so what was turned down is still readable afterwards.
+    const runDir = await makeRunDir(cwd);
+    this.runDirs.set(cwd, runDir);
+
+    const r = await phases.plan(
       `${state.ticket}\n\nThe previous plan was not accepted. ${note}`,
       stored.intents.map((i) => ({
         id: i.id, headline: i.headline,
         clauses: i.clauses.map((c) => ({ name: c.name, text: c.text })),
       })),
-      { cwd, budgetUSD: state.budgetUSD, sessionId: state.sessionId, signal: abort.signal },
+      { cwd, runDir, budgetUSD: state.budgetUSD, signal: abort.signal },
     );
 
-    if (!r.plan) {
+    if (!r.output) {
       this.apply(cwd, { type: "failed", reason: r.error ?? "replanning produced no plan" });
       return;
     }
-    this.apply(cwd, { type: "replan", plan: r.plan, costUSD: r.costUSD });
+    this.apply(cwd, { type: "replan", plan: r.output, costUSD: r.costUSD });
   }
 
   /** Stop the loop and kill whatever it spawned. */
