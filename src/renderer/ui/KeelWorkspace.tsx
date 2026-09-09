@@ -22,7 +22,8 @@ import { useEffect, useState } from "react";
 import { SURFACE, BORDER, INK, BRAND, STATE, FONT, TYPE, RADIUS, cleanPrompt } from "./keel-tokens.js";
 import { buildRows, attentionCount, type SortMode, type Tone, type WorklistFile } from "../../shared/worklist.js";
 import { KeelHandoff } from "./KeelHandoff.js";
-import type { HandoffState } from "../../shared/handoff.js";
+import { openQuestions, type HandoffState } from "../../shared/handoff.js";
+import { planProgress } from "../../shared/progress.js";
 import type { ContractEntry, FileContract } from "../../main/contract.js";
 
 export interface WorklistWire {
@@ -69,6 +70,9 @@ export function KeelWorkspace(props: {
   handoff: HandoffState;
   /** What the tree says has moved during the running phase. */
   handoffChanges?: string[];
+  /** The loop is set to stop at the next phase boundary. */
+  handoffPaused?: boolean;
+  onPauseHandoff?: (want: boolean) => void;
   onStart: (ticket: string, budgetUSD: number) => void;
   onApprove: () => void;
   onReplan: (note: string) => void;
@@ -94,6 +98,28 @@ export function KeelWorkspace(props: {
   const rows = buildRows(files, sort);
   const needing = attentionCount(files);
 
+  const changedSoFar = props.handoffChanges ?? [];
+  const progress = planProgress(props.handoff.plan, changedSoFar);
+  const decisions = openQuestions(props.handoff).length;
+
+  /*
+   * Which files the agent has already touched this phase.
+   *
+   * The set comes from the tree, not from the agent: these are files that
+   * actually moved since execution began, so the badge is a fact rather than
+   * a claim. Basenames are included because a plan and the worklist can spell
+   * the same file differently.
+   */
+  const touched = new Set<string>();
+  for (const p of changedSoFar) {
+    touched.add(p);
+    const base = p.split("/").pop();
+    if (base) touched.add(base);
+  }
+  const isBeingEdited = (path: string): boolean =>
+    props.handoff.phase === "executing"
+    && (touched.has(path) || touched.has(path.split("/").pop() ?? ""));
+
   return (
     <div style={S.backdrop} onMouseDown={(e) => { if (e.target === e.currentTarget) props.onClose(); }}>
       <div style={S.shell}>
@@ -105,13 +131,34 @@ export function KeelWorkspace(props: {
           <span style={{ flex: 1 }} />
           {(props.handoff.phase === "planning" || props.handoff.phase === "executing"
             || props.handoff.phase === "checking") && (
-            <span style={S.agentPill}><span style={S.dot} />agent on task</span>
+            <span style={S.agentPill}>
+              <span style={S.dot} />
+              agent on task
+              {/*
+                * "step 4 of 6" only while executing: during planning no step
+                * has started, and during checking they are all behind us. The
+                * denominator is the steps whose status the tree can actually
+                * report -- see `progress.ts` for why that is not always all
+                * of them.
+                */}
+              {props.handoff.phase === "executing" && progress.knowable > 0
+                && ` · step ${Math.min(progress.done + 1, progress.knowable)} of ${progress.knowable}`}
+            </span>
           )}
           {props.handoff.phase === "awaiting-approval" && (
             <span style={S.blocked}>a plan is waiting on you</span>
           )}
           {props.handoff.phase === "ready" && (
             <span style={S.blocked}>ready to review</span>
+          )}
+          {/*
+            * What still needs a person. The rail carries the detail; this is
+            * the count, so it is visible without reading the right column.
+            */}
+          {decisions > 0 && (
+            <span style={S.waiting}>
+              {decisions} decision{decisions === 1 ? "" : "s"} waiting on you
+            </span>
           )}
           <button style={S.ghost} onClick={props.onShowIntents}>intents</button>
           <button style={S.ghost} onClick={props.onShowTurn}>last turn</button>
@@ -160,12 +207,22 @@ export function KeelWorkspace(props: {
                     {r.kind === "file" ? shortPath(r.name) : r.name}
                   </span>
                   <span style={{ flex: 1 }} />
-                  {r.badge && (
+                  {/*
+                    * "agent" replaces the badge rather than joining it: the
+                    * row is narrow, and where the agent is working now is the
+                    * more useful of the two.
+                    */}
+                  {r.kind === "file" && isBeingEdited(r.path) ? (
+                    <span style={{
+                      fontFamily: FONT.product, fontSize: 9.5, flexShrink: 0,
+                      color: BRAND.brandText,
+                    }}>agent</span>
+                  ) : r.badge ? (
                     <span style={{
                       fontFamily: FONT.product, fontSize: 9.5, flexShrink: 0,
                       color: r.tone === "changed" ? BRAND.brandText : "rgba(253,253,252,.58)",
                     }}>{r.badge}</span>
-                  )}
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -212,6 +269,7 @@ export function KeelWorkspace(props: {
                   path={path}
                   tone={files.find((f) => f.path === path)?.tone ?? "normal"}
                   card={props.cards[path]}
+                  editing={isBeingEdited(path)}
                   onOpenInPane={() => props.onOpenInPane(path)}
                 />
               ))
@@ -223,6 +281,8 @@ export function KeelWorkspace(props: {
             <KeelHandoff
               state={props.handoff}
               changedSoFar={props.handoffChanges ?? []}
+              pauseRequested={props.handoffPaused}
+              onPause={props.onPauseHandoff}
               onStart={props.onStart}
               onApprove={props.onApprove}
               onReplan={props.onReplan}
@@ -271,6 +331,8 @@ function FileCard(props: {
   path: string;
   tone: Tone;
   card?: CardWire;
+  /** The agent has moved this file during the phase running now. */
+  editing?: boolean;
   onOpenInPane: () => void;
 }) {
   const { card } = props;
@@ -288,7 +350,15 @@ function FileCard(props: {
       <div style={S.cardTitle}>
         <span style={{ ...TYPE.mono115, color: "rgba(253,253,252,.4)" }}>{dir}</span>
         <span style={{ ...TYPE.title17, color: INK.i1 }}>{name}</span>
-        {props.tone === "changed" && <span style={S.stateChip}>changed this turn</span>}
+        {/*
+          * "the agent is editing this" outranks "changed this turn": both are
+          * true while a phase runs, and the live one is the news.
+          */}
+        {props.editing ? (
+          <span style={S.editingChip}><span style={S.dot} />agent is editing this file</span>
+        ) : props.tone === "changed" ? (
+          <span style={S.stateChip}>changed this turn</span>
+        ) : null}
         <span style={{ flex: 1 }} />
         <button style={S.sourceBtn} onClick={props.onOpenInPane}>source</button>
       </div>
@@ -421,6 +491,17 @@ const S: Record<string, React.CSSProperties> = {
     padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14,
   },
   cardTitle: { display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" },
+  waiting: {
+    padding: "3px 9px", borderRadius: RADIUS.pill,
+    background: STATE.warnWash, border: `1px solid ${STATE.warnEdge}`,
+    fontFamily: FONT.product, fontSize: 10.5, color: STATE.warn,
+  },
+  editingChip: {
+    display: "inline-flex", alignItems: "center", gap: 6,
+    padding: "2px 9px", borderRadius: RADIUS.pill,
+    background: BRAND.wash, border: `1px solid ${BRAND.edge}`,
+    fontFamily: FONT.product, fontSize: 10.5, color: BRAND.brandText,
+  },
   stateChip: {
     padding: "2px 8px", borderRadius: RADIUS.pill, background: "rgba(255,143,46,.12)",
     fontFamily: FONT.product, fontSize: 10.5, color: STATE.warn,

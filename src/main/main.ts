@@ -292,12 +292,16 @@ const handoff = new HandoffService(intents);
 // The tree's view of what has moved rides along with the state, so the rail
 // can show step status without a second channel that could disagree with it.
 handoff.on("changed", (cwd: string, state: unknown) =>
-  send(CH.handoffChanged, cwd, state, handoff.changedSoFar(cwd)));
+  send(CH.handoffChanged, cwd, state, handoff.changedSoFar(cwd),
+    handoff.isPauseRequested(cwd)));
 
 ipcMain.handle(CH.handoffState, (_e, cwd: string) => ({
   state: handoff.state(cwd),
   changedSoFar: handoff.changedSoFar(cwd),
+  pauseRequested: handoff.isPauseRequested(cwd),
 }));
+ipcMain.handle(CH.handoffPause, (_e, cwd: string, want: boolean) =>
+  handoff.requestPause(cwd, want));
 ipcMain.handle(CH.handoffStart, (_e, cwd: string, ticket: string, budget: number) =>
   // Not awaited: planning takes ~50s and the renderer follows the events.
   void handoff.start(cwd, ticket, budget),

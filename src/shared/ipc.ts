@@ -49,6 +49,7 @@ export const CH = {
   intentsSave: "intents:save",
   intentsRun: "intents:run",
   handoffState: "handoff:state",
+  handoffPause: "handoff:pause",
   handoffStart: "handoff:start",
   handoffApprove: "handoff:approve",
   handoffReplan: "handoff:replan",

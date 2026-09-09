@@ -63,6 +63,9 @@ function Elapsed(props: { since: number }) {
 
 export function KeelHandoff(props: {
   state: HandoffState;
+  /** The loop has been asked to stop at the next phase boundary. */
+  pauseRequested?: boolean;
+  onPause?: (want: boolean) => void;
   /** Paths the tree says have moved during the running phase. */
   changedSoFar?: string[];
   /** Budget the next handoff runs under. */
@@ -336,6 +339,29 @@ export function KeelHandoff(props: {
               <button style={S.ghost} onClick={props.onStop}>stop</button>
             </div>
           )}
+
+          {/*
+            * Pause at the next phase boundary.
+            *
+            * Only while executing, and worded for what it actually does. The
+            * mock says "pause after this step", but execution is a single
+            * `claude` invocation for the whole plan -- there is no step
+            * boundary to stop on, and a button claiming one would be a lie
+            * about how the loop works. The real boundary is after execution
+            * and before the review, which is a genuine place to take over:
+            * the work is on disk and nothing has judged it yet.
+            */}
+          {state.phase === "executing" && (
+            <button
+              style={props.pauseRequested ? S.pauseArmed : S.ghostWide}
+              onClick={() => props.onPause?.(!props.pauseRequested)}
+              title="Stops after the work is done, before anything reviews it"
+            >
+              {props.pauseRequested
+                ? "will pause before the review — click to cancel"
+                : "Pause before the review"}
+            </button>
+          )}
         </>
       )}
     </div>
@@ -388,6 +414,16 @@ const S: Record<string, React.CSSProperties> = {
     background: STATE.warnWash, border: `1px solid ${STATE.warnEdge}`,
   },
 
+  ghostWide: {
+    width: "100%", padding: "7px 10px", borderRadius: RADIUS.chip,
+    border: `1px solid ${BORDER.b2}`, background: "transparent",
+    color: INK.i3, ...TYPE.body115, cursor: "pointer",
+  },
+  pauseArmed: {
+    width: "100%", padding: "7px 10px", borderRadius: RADIUS.chip,
+    border: `1px solid ${STATE.warnEdge}`, background: STATE.warnWash,
+    color: STATE.warn, ...TYPE.body115, cursor: "pointer",
+  },
   questions: {
     padding: "11px 13px", borderRadius: RADIUS.box,
     background: STATE.warnWash, border: `1px solid ${STATE.warnEdge}`,

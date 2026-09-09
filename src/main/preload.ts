@@ -44,6 +44,7 @@ const CH = {
   intentsSave: "intents:save",
   intentsRun: "intents:run",
   handoffState: "handoff:state",
+  handoffPause: "handoff:pause",
   handoffStart: "handoff:start",
   handoffApprove: "handoff:approve",
   handoffReplan: "handoff:replan",
@@ -331,6 +332,8 @@ const api = {
     ipcRenderer.invoke(CH.intentsRun, cwd, command),
 
   handoffState: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.handoffState, cwd),
+  handoffPause: (cwd: string, want: boolean): Promise<unknown> =>
+    ipcRenderer.invoke(CH.handoffPause, cwd, want),
   handoffStart: (cwd: string, ticket: string, budgetUSD: number): Promise<unknown> =>
     ipcRenderer.invoke(CH.handoffStart, cwd, ticket, budgetUSD),
   handoffApprove: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.handoffApprove, cwd),
@@ -339,10 +342,12 @@ const api = {
   handoffStop: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.handoffStop, cwd),
   handoffReset: (cwd: string): Promise<unknown> => ipcRenderer.invoke(CH.handoffReset, cwd),
   onHandoffChanged: (
-    fn: (cwd: string, state: unknown, changedSoFar: string[]) => void,
+    fn: (cwd: string, state: unknown, changedSoFar: string[], pauseRequested: boolean) => void,
   ): (() => void) => {
-    const h = (_e: unknown, cwd: string, state: unknown, changedSoFar: string[] = []): void =>
-      fn(cwd, state, changedSoFar);
+    const h = (
+      _e: unknown, cwd: string, state: unknown,
+      changedSoFar: string[] = [], pauseRequested = false,
+    ): void => fn(cwd, state, changedSoFar, pauseRequested);
     ipcRenderer.on(CH.handoffChanged, h);
     return () => { ipcRenderer.off(CH.handoffChanged, h); };
   },

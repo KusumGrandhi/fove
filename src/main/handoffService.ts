@@ -33,6 +33,28 @@ export class HandoffService extends EventEmitter {
   private readonly snapshots = new SnapshotStore();
   /** Live per-cwd polling of what has moved, while a phase is executing. */
   private readonly watchers = new Map<string, ReturnType<typeof setInterval>>();
+  /**
+   * Workspaces asked to stop at the next phase boundary.
+   *
+   * Deliberately *not* "pause after this step". Execution is a single `claude`
+   * invocation for the whole plan, so there is no step boundary to stop on --
+   * a button promising one would be a lie about how the loop works. The real
+   * boundary is between phases, and stopping there means the work is finished
+   * and on disk but nothing has reviewed it yet, which is a genuine place to
+   * take over.
+   */
+  private readonly pauseRequested = new Set<string>();
+
+  /** Ask the loop to stop after the running phase, without killing it. */
+  requestPause(cwd: string, want: boolean): void {
+    if (want) this.pauseRequested.add(cwd);
+    else this.pauseRequested.delete(cwd);
+    this.emit("changed", cwd, this.state(cwd));
+  }
+
+  isPauseRequested(cwd: string): boolean {
+    return this.pauseRequested.has(cwd);
+  }
   /** Paths seen to have moved so far this execution, for step status. */
   private readonly progress = new Map<string, string[]>();
 
@@ -163,6 +185,22 @@ export class HandoffService extends EventEmitter {
     const executed = this.apply(cwd, { type: "executed", costUSD: exec.costUSD });
     if (executed.phase !== "checking") return;
 
+    /*
+     * Stop here if asked, with the work done and unreviewed.
+     *
+     * `stop` rather than a new phase: the state machine already means
+     * "finished early, and a human owns what happens next", and the reason
+     * says the changes are on disk so nobody has to guess.
+     */
+    if (this.pauseRequested.has(cwd)) {
+      this.pauseRequested.delete(cwd);
+      this.apply(cwd, {
+        type: "stop",
+        reason: "paused after execution — the changes are on disk, nothing has checked them",
+      });
+      return;
+    }
+
     await this.check(cwd, executed);
   }
 
@@ -239,6 +277,7 @@ export class HandoffService extends EventEmitter {
     this.aborts.delete(cwd);
     this.stopWatching(cwd);
     this.progress.delete(cwd);
+    this.pauseRequested.delete(cwd);
     this.states.delete(cwd);
     this.snapshots.forget(cwd);
     this.emit("changed", cwd, initial());
