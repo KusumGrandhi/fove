@@ -293,12 +293,13 @@ const handoff = new HandoffService(intents);
 // can show step status without a second channel that could disagree with it.
 handoff.on("changed", (cwd: string, state: unknown) =>
   send(CH.handoffChanged, cwd, state, handoff.changedSoFar(cwd),
-    handoff.isPauseRequested(cwd)));
+    handoff.isPauseRequested(cwd), handoff.driftedIntents(cwd)));
 
 ipcMain.handle(CH.handoffState, (_e, cwd: string) => ({
   state: handoff.state(cwd),
   changedSoFar: handoff.changedSoFar(cwd),
   pauseRequested: handoff.isPauseRequested(cwd),
+  drifted: handoff.driftedIntents(cwd),
 }));
 ipcMain.handle(CH.handoffPause, (_e, cwd: string, want: boolean) =>
   handoff.requestPause(cwd, want));

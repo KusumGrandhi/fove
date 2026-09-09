@@ -26,6 +26,15 @@ import { openQuestions, type HandoffState } from "../../shared/handoff.js";
 import { planProgress } from "../../shared/progress.js";
 import type { ContractEntry, FileContract } from "../../main/contract.js";
 
+/** One intent violation, as it crosses IPC. */
+export interface DriftWire {
+  intentId: string;
+  clause: string;
+  file: string;
+  evidence: string;
+  confident?: boolean;
+}
+
 export interface WorklistWire {
   files: WorklistFile[];
   total: number;
@@ -73,6 +82,8 @@ export function KeelWorkspace(props: {
   /** The loop is set to stop at the next phase boundary. */
   handoffPaused?: boolean;
   onPauseHandoff?: (want: boolean) => void;
+  /** Intent violations a second agent found in the last checked diff. */
+  handoffDrift?: DriftWire[];
   onStart: (ticket: string, budgetUSD: number) => void;
   onApprove: () => void;
   onReplan: (note: string) => void;
@@ -116,6 +127,22 @@ export function KeelWorkspace(props: {
     const base = p.split("/").pop();
     if (base) touched.add(base);
   }
+  /*
+   * Drift, indexed by file.
+   *
+   * Keyed on both the full path and the basename: the reviewer names a file
+   * as the diff shows it, which is not always how the worklist spells it.
+   */
+  const driftByFile = new Map<string, DriftWire[]>();
+  for (const d of props.handoffDrift ?? []) {
+    for (const key of [d.file, d.file.split("/").pop() ?? d.file]) {
+      const list = driftByFile.get(key);
+      if (list) list.push(d); else driftByFile.set(key, [d]);
+    }
+  }
+  const driftFor = (path: string): DriftWire[] =>
+    driftByFile.get(path) ?? driftByFile.get(path.split("/").pop() ?? "") ?? [];
+
   const isBeingEdited = (path: string): boolean =>
     props.handoff.phase === "executing"
     && (touched.has(path) || touched.has(path.split("/").pop() ?? ""));
@@ -212,7 +239,13 @@ export function KeelWorkspace(props: {
                     * row is narrow, and where the agent is working now is the
                     * more useful of the two.
                     */}
-                  {r.kind === "file" && isBeingEdited(r.path) ? (
+                  {/* Drift first: a broken rule outranks where the agent is. */}
+                  {r.kind === "file" && driftFor(r.path).length > 0 ? (
+                    <span style={{
+                      fontFamily: FONT.product, fontSize: 9.5, flexShrink: 0,
+                      color: STATE.warn,
+                    }}>drift</span>
+                  ) : r.kind === "file" && isBeingEdited(r.path) ? (
                     <span style={{
                       fontFamily: FONT.product, fontSize: 9.5, flexShrink: 0,
                       color: BRAND.brandText,
@@ -270,6 +303,7 @@ export function KeelWorkspace(props: {
                   tone={files.find((f) => f.path === path)?.tone ?? "normal"}
                   card={props.cards[path]}
                   editing={isBeingEdited(path)}
+                  drift={driftFor(path)}
                   onOpenInPane={() => props.onOpenInPane(path)}
                 />
               ))
@@ -333,6 +367,8 @@ function FileCard(props: {
   card?: CardWire;
   /** The agent has moved this file during the phase running now. */
   editing?: boolean;
+  /** Rules a second agent judged this file's changes to break. */
+  drift?: DriftWire[];
   onOpenInPane: () => void;
 }) {
   const { card } = props;
@@ -354,6 +390,14 @@ function FileCard(props: {
           * "the agent is editing this" outranks "changed this turn": both are
           * true while a phase runs, and the live one is the news.
           */}
+        {/*
+          * Drift outranks everything: a rule the change breaks is the most
+          * important thing on the card, and it must not be a colour someone
+          * has to notice.
+          */}
+        {(props.drift?.length ?? 0) > 0 && (
+          <span style={S.driftChip}>drifted from its intent</span>
+        )}
         {props.editing ? (
           <span style={S.editingChip}><span style={S.dot} />agent is editing this file</span>
         ) : props.tone === "changed" ? (
@@ -402,10 +446,29 @@ function FileCard(props: {
 
             <div>
               <div style={S.colEyebrow}>INVARIANTS</div>
-              <div style={S.noIntent}>
-                No intent covers this file, so nothing is checking it. Writing one is
-                what turns this column from empty into the reason to trust a handoff.
-              </div>
+              {(props.drift?.length ?? 0) > 0 ? (
+                /*
+                 * The evidence, not just the verdict.
+                 *
+                 * A second agent read the diff and named the rule it breaks.
+                 * Showing the quoted line is the difference between a claim
+                 * you have to go and check anyway and one you can act on.
+                 */
+                (props.drift ?? []).map((d, i) => (
+                  <div key={`${d.intentId}-${d.clause}-${i}`} style={S.driftBox}>
+                    <div style={{ fontFamily: FONT.product, fontSize: 11, color: STATE.warn }}>
+                      breaks {d.intentId} · clause {d.clause}
+                      {d.confident === false && " — reviewer was not certain"}
+                    </div>
+                    <div style={S.driftEvidence}>{d.evidence}</div>
+                  </div>
+                ))
+              ) : (
+                <div style={S.noIntent}>
+                  No intent covers this file, so nothing is checking it. Writing one is
+                  what turns this column from empty into the reason to trust a handoff.
+                </div>
+              )}
             </div>
           </div>
         </>
@@ -495,6 +558,19 @@ const S: Record<string, React.CSSProperties> = {
     padding: "3px 9px", borderRadius: RADIUS.pill,
     background: STATE.warnWash, border: `1px solid ${STATE.warnEdge}`,
     fontFamily: FONT.product, fontSize: 10.5, color: STATE.warn,
+  },
+  driftChip: {
+    padding: "2px 9px", borderRadius: RADIUS.pill,
+    background: STATE.warnWash, border: `1px solid ${STATE.warnEdge}`,
+    fontFamily: FONT.product, fontSize: 10.5, color: STATE.warn,
+  },
+  driftBox: {
+    marginTop: 10, padding: "9px 11px", borderRadius: 7,
+    background: STATE.warnWash, border: `1px solid ${STATE.warnEdge}`,
+  },
+  driftEvidence: {
+    fontFamily: FONT.mono, fontSize: 11, color: INK.i2,
+    marginTop: 4, whiteSpace: "pre-wrap", wordBreak: "break-word",
   },
   editingChip: {
     display: "inline-flex", alignItems: "center", gap: 6,

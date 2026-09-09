@@ -65,6 +65,34 @@ const PLAN_SCHEMA = {
   required: ["summary", "steps"],
 };
 
+/**
+ * A drift verdict: which intent clauses the diff contradicts.
+ *
+ * `clause` is cited by id so the answer can be attached to the rule it is
+ * about rather than parsed out of prose, and `evidence` is required because a
+ * drift claim nobody can check is worth less than no claim at all.
+ */
+const DRIFT_SCHEMA = {
+  type: "object",
+  properties: {
+    violations: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          intentId: { type: "string" },
+          clause: { type: "string" },
+          file: { type: "string" },
+          evidence: { type: "string" },
+          confident: { type: "boolean" },
+        },
+        required: ["intentId", "clause", "file", "evidence"],
+      },
+    },
+  },
+  required: ["violations"],
+};
+
 /** A review verdict, for the checking phase. */
 const REVIEW_SCHEMA = {
   type: "object",
@@ -84,6 +112,18 @@ const REVIEW_SCHEMA = {
   },
   required: ["findings"],
 };
+
+/** One rule the diff was judged to break. */
+export interface DriftViolation {
+  intentId: string;
+  /** Clause number within that intent, e.g. "01". */
+  clause: string;
+  file: string;
+  /** The line or construct that breaks it, quoted from the diff. */
+  evidence: string;
+  /** False when the reviewer was inferring rather than reading a clear breach. */
+  confident?: boolean;
+}
 
 export interface RunOptions {
   cwd: string;
@@ -296,6 +336,71 @@ export class HandoffRunner {
 
     const r = await runClaude(prompt, ["--permission-mode", "acceptEdits"], opts);
     return { ok: r.ok, costUSD: r.costUSD, denials: r.denials, error: r.error };
+  }
+
+  /**
+   * Ask a *second* agent which intents the diff contradicts.
+   *
+   * This is the discriminator, and the distinction it rests on is the one that
+   * makes it worth running at all: a model asked "did you follow the rules?"
+   * is grading its own homework, and models are weakest exactly there. A model
+   * shown a diff it did not write, and a list of rules, is doing a different
+   * job -- reading code for violations, which is ordinary review work.
+   *
+   * So it runs in a **fresh session**: `sessionId` is deliberately not passed
+   * through. Resuming the writer's conversation would hand it every
+   * justification it already told itself, which is the thing being checked.
+   *
+   * `--permission-mode plan` because a reviewer must not edit, and the diff is
+   * passed inline rather than as paths so the verdict is about what actually
+   * changed rather than whatever the file says by the time it is read.
+   */
+  async drift(
+    diff: string,
+    intents: { id: string; headline: string; clauses: { num: string; name: string; text: string }[] }[],
+    opts: RunOptions,
+  ): Promise<{ violations: DriftViolation[]; costUSD: number; error?: string }> {
+    if (!diff.trim() || intents.length === 0) return { violations: [], costUSD: 0 };
+
+    const rules = intents.flatMap((i) => [
+      `[${i.id}] ${i.headline}`,
+      ...i.clauses.map((c) => `  ${c.num} ${c.name}: ${c.text}`),
+    ]);
+
+    const prompt = [
+      "You are reviewing someone else's change. You did not write it.",
+      "",
+      "Below are rules this codebase must keep true, then the diff. Report only",
+      "rules the diff actually breaks.",
+      "",
+      "RULES",
+      ...rules,
+      "",
+      "DIFF",
+      diff.slice(0, 60_000),
+      "",
+      "For each violation give the intent id, the clause number, the file, and",
+      "the specific line or construct that breaks it. Quote it -- a claim with",
+      "no evidence is worse than no claim, because someone has to go and check",
+      "it either way.",
+      "",
+      "Set confident=false when the rule is ambiguous or you are inferring intent",
+      "rather than reading a clear breach. Report nothing if nothing is broken:",
+      "an empty list is the expected answer for most changes, and inventing a",
+      "violation to look useful makes every real one worth less.",
+    ].join("\n");
+
+    // A fresh session on purpose -- see the note above. `sessionId` is dropped.
+    const r = await runClaude(prompt, [
+      "--permission-mode", "plan",
+      "--json-schema", JSON.stringify(DRIFT_SCHEMA),
+    ], { ...opts, sessionId: undefined });
+
+    if (!r.ok || !r.structured) {
+      return { violations: [], costUSD: r.costUSD, error: r.error ?? "no verdict came back" };
+    }
+    const out = (r.structured as { violations?: DriftViolation[] }).violations ?? [];
+    return { violations: out, costUSD: r.costUSD };
   }
 
   /**

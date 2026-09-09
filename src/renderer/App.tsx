@@ -26,6 +26,7 @@ import { Keel, type TurnReview } from "./ui/Keel.js";
 import { KeelWorkspace, type WorklistWire, type CardWire } from "./ui/KeelWorkspace.js";
 import { KeelIntents, type IntentsWire } from "./ui/KeelIntents.js";
 import { initial as initialHandoff, type HandoffState } from "../shared/handoff.js";
+import type { DriftWire } from "./ui/KeelWorkspace.js";
 import type { WorktreeStatus } from "../main/worktrees.js";
 import { THEMES, DEFAULT_THEME, applyTheme } from "./ui/themes.js";
 import {
@@ -375,6 +376,8 @@ export function App() {
   const [handoffChanges, setHandoffChanges] = useState<Record<string, string[]>>({});
   /** Per-workspace: the loop has been asked to stop at the next boundary. */
   const [handoffPaused, setHandoffPaused] = useState<Record<string, boolean>>({});
+  /** Per-workspace: intent violations the discriminator found. */
+  const [handoffDrift, setHandoffDrift] = useState<Record<string, DriftWire[]>>({});
   const [worklist, setWorklist] = useState<WorklistWire | null>(null);
   const [cards, setCards] = useState<Record<string, CardWire | undefined>>({});
   /** Open file cards. Capped at two, per rule 4; a third closes the oldest. */
@@ -747,11 +750,12 @@ export function App() {
   // Phases advance on their own, so the main process pushes rather than being
   // polled -- a poll would either lag a 50s plan or hammer for nothing.
   useEffect(() => {
-    const off = window.th.onHandoffChanged((cwd, state, changedSoFar, pauseRequested) => {
+    const off = window.th.onHandoffChanged((cwd, state, changedSoFar, pauseRequested, drifted) => {
       setHandoffs((prev) => ({ ...prev, [cwd]: state as HandoffState }));
       // What the tree says has moved so far, for the plan's step status.
       setHandoffChanges((prev) => ({ ...prev, [cwd]: changedSoFar ?? [] }));
       setHandoffPaused((prev) => ({ ...prev, [cwd]: pauseRequested ?? false }));
+      setHandoffDrift((prev) => ({ ...prev, [cwd]: (drifted ?? []) as DriftWire[] }));
     });
     return off;
   }, []);
@@ -805,10 +809,14 @@ export function App() {
     if (active) {
       void (async () => {
         const r = (await window.th.handoffState(active.cwd)) as
-          { state: HandoffState; changedSoFar: string[]; pauseRequested: boolean };
+          {
+            state: HandoffState; changedSoFar: string[];
+            pauseRequested: boolean; drifted: DriftWire[];
+          };
         setHandoffs((prev) => ({ ...prev, [active.cwd]: r.state }));
         setHandoffChanges((prev) => ({ ...prev, [active.cwd]: r.changedSoFar ?? [] }));
         setHandoffPaused((prev) => ({ ...prev, [active.cwd]: r.pauseRequested ?? false }));
+        setHandoffDrift((prev) => ({ ...prev, [active.cwd]: r.drifted ?? [] }));
       })();
     }
   }, [loadKeel, loadWorklist, active]);
@@ -1022,6 +1030,7 @@ export function App() {
           handoff={handoffs[active.cwd] ?? initialHandoff()}
           handoffChanges={handoffChanges[active.cwd] ?? []}
           handoffPaused={handoffPaused[active.cwd] ?? false}
+          handoffDrift={handoffDrift[active.cwd] ?? []}
           onPauseHandoff={(want) => void window.th.handoffPause(active.cwd, want)}
           onStart={(ticket, budget) => void window.th.handoffStart(active.cwd, ticket, budget)}
           onApprove={() => void window.th.handoffApprove(active.cwd)}

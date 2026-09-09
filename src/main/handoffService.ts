@@ -15,11 +15,12 @@
  */
 
 import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
 import {
   initial, reduce, mayExecute,
   type HandoffState, type HandoffEvent, type CheckResult,
 } from "../shared/handoff.js";
-import { HandoffRunner } from "./handoffRunner.js";
+import { HandoffRunner, type DriftViolation } from "./handoffRunner.js";
 import { IntentStore } from "./intentStore.js";
 import { SnapshotStore, takeSnapshot } from "./snapshots.js";
 import { compareSnapshots } from "../shared/changeset.js";
@@ -57,6 +58,13 @@ export class HandoffService extends EventEmitter {
   }
   /** Paths seen to have moved so far this execution, for step status. */
   private readonly progress = new Map<string, string[]>();
+  /** Intent violations the discriminator found, per workspace. */
+  private readonly drifted = new Map<string, DriftViolation[]>();
+
+  /** Which intents the last check found the work contradicting. */
+  driftedIntents(cwd: string): DriftViolation[] {
+    return this.drifted.get(cwd) ?? [];
+  }
 
   /** What has changed so far in the running execution, for the UI. */
   changedSoFar(cwd: string): string[] {
@@ -167,6 +175,9 @@ export class HandoffService extends EventEmitter {
     // From here the tree is the record of what the agent is doing, so the
     // plan's steps can report their own status while it works.
     this.progress.set(cwd, []);
+    // Last run's verdict is about last run's diff; keeping it would attach a
+    // stale violation to work that has not been judged yet.
+    this.drifted.delete(cwd);
     this.startWatching(cwd);
 
     const exec = await this.runner.execute(approved.plan, {
@@ -204,6 +215,44 @@ export class HandoffService extends EventEmitter {
     await this.check(cwd, executed);
   }
 
+  /**
+   * The raw diff for the files a turn touched, for the drift reviewer.
+   *
+   * Both halves matter: `git diff` covers edits to tracked files, and
+   * `--no-index /dev/null <path>` is the only way to show a file the turn
+   * *created*, which is otherwise invisible to diff and is exactly where a new
+   * rule violation is most likely to be introduced.
+   */
+  private async diffFor(cwd: string, paths: string[]): Promise<string> {
+    if (paths.length === 0) return "";
+    const run = (args: string[]): Promise<string> =>
+      new Promise((resolve) => {
+        const child = spawn("git", args, { cwd, windowsHide: true });
+        let out = "";
+        child.stdout.on("data", (c: Buffer) => {
+          // A generated file can be enormous; the reviewer cannot use it all.
+          if (out.length < 200_000) out += c.toString();
+        });
+        child.on("error", () => resolve(""));
+        // `--no-index` exits 1 when files differ, which is the normal case.
+        child.on("close", () => resolve(out));
+      });
+
+    const tracked = await run(["diff", "--no-color", "--no-ext-diff", "-M", "--", ...paths]);
+
+    // Untracked files produce nothing above, so they are diffed against
+    // /dev/null one at a time.
+    const untracked = await run(["ls-files", "--others", "--exclude-standard", "--", ...paths]);
+    const news: string[] = [];
+    for (const path of untracked.split("\n").map((s) => s.trim()).filter(Boolean)) {
+      news.push(await run([
+        "diff", "--no-color", "--no-ext-diff", "--no-index", "--", "/dev/null", path,
+      ]));
+    }
+
+    return [tracked, ...news].filter(Boolean).join("\n");
+  }
+
   /** Run mechanisms and an adversarial review over what changed. */
   private async check(cwd: string, state: HandoffState): Promise<void> {
     const pair = await this.snapshots.end(cwd);
@@ -233,6 +282,45 @@ export class HandoffService extends EventEmitter {
       // A failed review must not lose the work. Reaching `ready` with no
       // checks is honest -- and the UI says nothing checked it.
       checks = [];
+    }
+
+    /*
+     * The discriminator: a second agent reads the diff against the rules.
+     *
+     * Separate from the review above, and after it, because they answer
+     * different questions -- that one asks "is this change any good", this one
+     * asks "does it break a rule you wrote down". Its failure is contained:
+     * drift is an addition to what is known, so if it cannot run, the rest of
+     * the checks still stand.
+     */
+    try {
+      const diff = await this.diffFor(cwd, changed);
+      const forReview = stored.intents.map((i) => ({
+        id: i.id,
+        headline: i.headline,
+        clauses: i.clauses.map((c) => ({ num: c.num, name: c.name, text: c.text })),
+      }));
+      const d = await this.runner.drift(diff, forReview, {
+        cwd, budgetUSD: state.budgetUSD, signal: abort.signal,
+      });
+
+      this.drifted.set(cwd, d.violations);
+      for (const v of d.violations) {
+        const intent = stored.intents.find((i) => i.id === v.intentId);
+        const clause = intent?.clauses.find((c) => c.num === v.clause);
+        checks.push({
+          kind: "intent",
+          label: `${intent?.headline ?? v.intentId} — ${clause?.name ?? v.clause}`,
+          passed: false,
+          // The evidence is the point: a drift claim nobody can check costs
+          // more to verify than it saves.
+          detail: `${v.file}: ${v.evidence}`
+            + (v.confident === false ? " (reviewer was not certain)" : ""),
+        });
+      }
+    } catch {
+      // Drift is an addition to what is known; failing to compute it must not
+      // discard the checks that did run.
     }
 
     this.apply(cwd, { type: "checked", checks });
@@ -278,6 +366,7 @@ export class HandoffService extends EventEmitter {
     this.stopWatching(cwd);
     this.progress.delete(cwd);
     this.pauseRequested.delete(cwd);
+    this.drifted.delete(cwd);
     this.states.delete(cwd);
     this.snapshots.forget(cwd);
     this.emit("changed", cwd, initial());
