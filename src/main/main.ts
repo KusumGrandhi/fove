@@ -66,6 +66,8 @@ import { listSessions } from "../data/transcript.js";
 import { openInEditor, revealInFinder } from "./openExternal.js";
 import { installMenu } from "./menu.js";
 import { loadState, saveState } from "./store.js";
+import { homedir } from "node:os";
+import { launchCwd } from "../shared/launch-cwd.js";
 import { CH, type SpawnRequest } from "../shared/ipc.js";
 
 let win: BrowserWindow | null = null;
@@ -551,7 +553,22 @@ ipcMain.handle(CH.teamInterrupt, (_e, socket: string, paneId: string) =>
   teamSvc.interrupt(socket, paneId),
 );
 
-ipcMain.handle(CH.appCwd, () => process.cwd());
+/**
+ * The folder a workspace opens in when nothing else says.
+ *
+ * `process.cwd()` alone was wrong for the way most people start an app: a
+ * Finder or Spotlight launch inherits `/`, so a first run opened on the
+ * filesystem root. The saved layout's own directories are the fallback --
+ * they are the only record of what this person actually works on.
+ */
+ipcMain.handle(CH.appCwd, () => {
+  const saved = loadState<{ tabs?: { cwd?: string }[] } | null>(null);
+  return launchCwd({
+    cwd: process.cwd(),
+    recent: (saved?.tabs ?? []).map((t) => t.cwd),
+    home: homedir(),
+  });
+});
 
 ipcMain.handle(CH.layoutLoad, () => loadState<unknown>(null));
 ipcMain.on(CH.layoutSave, (_e, state: unknown) => saveState(state));
