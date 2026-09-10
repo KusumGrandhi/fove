@@ -91,6 +91,18 @@ interface Persisted {
   activeTabId: string;
 }
 
+/**
+ * Pane kinds that exist at most once per workspace.
+ *
+ * Each of these shows one thing -- this repository, these settings, this
+ * search -- so a second copy adds no information and takes width from the
+ * panes that do. `shell` and `claude` are absent: a second session of either
+ * is a second piece of work, not a second view of the same one.
+ */
+const SINGLETON_PANES = new Set<PaneKind>([
+  "git", "debug", "search", "config", "browser", "agents", "editor",
+]);
+
 const makePane = (kind: PaneKind, cwd?: string): PaneSpec => ({
   id: newId("p"),
   kind,
@@ -220,9 +232,33 @@ export function App() {
   );
 
   // ---- pane actions --------------------------------------------------------
+  /**
+   * Open a pane of `kind`, reusing one that is already here.
+   *
+   * A second git pane, or a second config pane, shows the same repository and
+   * the same settings twice while halving the width of everything else -- the
+   * cost of the fifth pane is paid by the four already open. So these kinds
+   * are singletons: asking for one focuses the one that exists.
+   *
+   * `shell` is deliberately not in the set. Two shells in two directories is a
+   * real way to work, and the editor is a singleton for the opposite reason --
+   * it holds tabs, so one pane is already many files.
+   *
+   * `force` is the escape hatch, and it is what ⌘D / Split still do: an
+   * explicit split is a layout decision, not a request to see a kind.
+   */
   const doSplit = useCallback(
-    (dir: Dir, kind: PaneKind = "shell") => {
+    (dir: Dir, kind: PaneKind = "shell", force = false) => {
       if (!active) return;
+
+      if (!force && SINGLETON_PANES.has(kind)) {
+        const existing = Object.values(active.panes).find((p) => p.kind === kind);
+        if (existing) {
+          updateTab(active.id, (t) => ({ ...t, focusedPaneId: existing.id }));
+          return;
+        }
+      }
+
       const pane = makePane(kind, active.cwd);
       updateTab(active.id, (t) => ({
         ...t,
@@ -714,12 +750,12 @@ export function App() {
       cmd("cmd:keel", "What changed in the last turn", "⌘L", () => openKeelRef.current()),
       cmd("cmd:claude", "New Claude pane", "⌘↵", () => doSplit("row", "claude")),
       cmd("cmd:shell", "New shell pane", "", () => doSplit("row", "shell")),
-      cmd("cmd:editor", "New editor pane", "⌘E", () => doSplit("row", "editor")),
-      cmd("cmd:git", "New git pane", "⌘G", () => doSplit("row", "git")),
-      cmd("cmd:agents", "New agents pane", "⌘R", () => doSplit("row", "agents")),
+      cmd("cmd:editor", "Editor", "⌘E", () => doSplit("row", "editor")),
+      cmd("cmd:git", "Git", "⌘G", () => doSplit("row", "git")),
+      cmd("cmd:agents", "Agents", "⌘R", () => doSplit("row", "agents")),
       cmd("cmd:search", "Search the codebase", "⌘⇧F", () => doSplit("row", "search")),
-      cmd("cmd:browser", "New browser pane", "⌘B", () => doSplit("row", "browser")),
-      cmd("cmd:debug", "New debugger pane", "", () => doSplit("row", "debug")),
+      cmd("cmd:browser", "Browser", "⌘B", () => doSplit("row", "browser")),
+      cmd("cmd:debug", "Debugger", "", () => doSplit("row", "debug")),
       cmd("cmd:config", "Open config", "⌘K", () => doSplit("row", "config")),
       cmd("cmd:model", "Switch model", "⌘M", () => setPickerOpen(true)),
       cmd("cmd:split", "Split right", "⌘D", () => doSplit("row")),
