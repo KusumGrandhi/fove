@@ -22,6 +22,7 @@ import { AgentsWidget, TokensWidget, useSnapshot } from "./ui/widgets.js";
 import { TeammateBar, TeammateView, useTeammates } from "./ui/Teammates.js";
 import { C, Divider, LayoutMenu, ToolButton, ToolMenu } from "./ui/Chrome.js";
 import { Palette, type PaletteItem } from "./ui/Palette.js";
+import { Spotlight } from "./ui/Spotlight.js";
 import { Keel, type TurnReview } from "./ui/Keel.js";
 import { KeelWorkspace, type WorklistWire, type CardWire } from "./ui/KeelWorkspace.js";
 import { KeelIntents, type IntentsWire } from "./ui/KeelIntents.js";
@@ -353,6 +354,7 @@ export function App() {
    */
   const openKeelRef = useRef<() => void>(() => {});
   const openPaletteRef = useRef<() => void>(() => {});
+  const openSpotlightRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -370,7 +372,16 @@ export function App() {
       else if (e.key === "m") { e.preventDefault(); setPickerOpen(true); }
       else if (e.key === "k") { e.preventDefault(); doSplit("row", "config"); }
       else if (e.key === "b") { e.preventDefault(); doSplit("row", "browser"); }
-      else if (e.key === "f" && e.shiftKey) { e.preventDefault(); doSplit("row", "search"); }
+      /*
+       * ⌘⇧F opens Spotlight.
+       *
+       * This binding used to split a search *pane*, and that is the whole
+       * reason Spotlight was hard to find: the key everyone's hands already
+       * press for "search" kept rearranging the workspace instead. The pane
+       * still exists and the palette still opens it, for the regex and glob
+       * toggles Spotlight deliberately does not carry.
+       */
+      else if (e.key === "f" && e.shiftKey) { e.preventDefault(); openSpotlightRef.current(); }
       /*
        * ⌘L disabled for now, deliberately left in place rather than deleted.
        *
@@ -378,7 +389,9 @@ export function App() {
        * only the shortcut is off, so re-enabling is uncommenting this line.
        */
       // else if (e.key === "l") { e.preventDefault(); openKeelRef.current(); }
-      else if (e.key === "o" || e.key === "O") { e.preventDefault(); openPaletteRef.current(); }
+      // ⌘⇧O reaches Spotlight too, next to ⌘O's "go to a worktree".
+      else if (e.key === "O" || (e.key === "o" && e.shiftKey)) { e.preventDefault(); openSpotlightRef.current(); }
+      else if (e.key === "o") { e.preventDefault(); openPaletteRef.current(); }
       else if (e.key === "p" && e.shiftKey) { e.preventDefault(); togglePin(activeTabId); }
       else if (e.key === "p") { e.preventDefault(); if (active) togglePanePin(active.focusedPaneId); }
       else if (e.key === "Enter") { e.preventDefault(); doSplit("row", "claude"); }
@@ -690,6 +703,18 @@ export function App() {
     [active, updateTab],
   );
 
+  /*
+   * Spotlight's open flag, declared above the palette that opens it.
+   *
+   * The palette builds its items in a memo further down and only *calls* this
+   * setter from a click handler, so a later declaration would technically
+   * work -- but it would sit in the temporal dead zone, and the next person to
+   * hoist that call out of its closure would get a runtime error with no
+   * compile-time warning. Declaring it first removes the trap.
+   */
+  const [spotlightOpen, setSpotlightOpen] = useState(false);
+  openSpotlightRef.current = useCallback(() => setSpotlightOpen(true), []);
+
   /**
    * Everything the palette can do: worktrees first, then commands.
    *
@@ -778,7 +803,9 @@ export function App() {
       cmd("cmd:editor", "Editor", "⌘E", () => doSplit("row", "editor")),
       cmd("cmd:git", "Git", "⌘G", () => doSplit("row", "git")),
       cmd("cmd:agents", "Agents", "⌘R", () => doSplit("row", "agents")),
-      cmd("cmd:search", "Search the codebase", "⌘⇧F", () => doSplit("row", "search")),
+      cmd("cmd:search", "Search the codebase", "⌘⇧F", () => setSpotlightOpen(true)),
+      // The pane is still reachable, for the regex, case and glob toggles.
+      cmd("cmd:searchpane", "Search in a pane (regex, globs)", "", () => doSplit("row", "search")),
       cmd("cmd:browser", "Browser", "⌘B", () => doSplit("row", "browser")),
       cmd("cmd:debug", "Debugger", "", () => doSplit("row", "debug")),
       cmd("cmd:config", "Open config", "⌘K", () => doSplit("row", "config")),
@@ -1027,7 +1054,7 @@ export function App() {
             { label: "Editor", hint: "⌘E", icon: "◧", onSelect: () => doSplit("row", "editor") },
             { label: "Shell", icon: "❯", onSelect: () => doSplit("row", "shell") },
             { label: "Git", hint: "⌘G", icon: "⎇", onSelect: () => doSplit("row", "git") },
-            { label: "Search", hint: "⌘⇧F", icon: "⌕", onSelect: () => doSplit("row", "search") },
+            { label: "Search", hint: "⌘⇧F", icon: "⌕", onSelect: () => setSpotlightOpen(true) },
             { label: "Browser", hint: "⌘B", icon: "◍", onSelect: () => doSplit("row", "browser") },
             { label: "Debug", icon: "◆", onSelect: () => doSplit("row", "debug") },
             { label: "Config", hint: "⌘K", icon: "⚙", onSelect: () => doSplit("row", "config") },
@@ -1117,6 +1144,14 @@ export function App() {
           items={paletteItems}
           empty={worktrees.length === 0 ? "not a git repository" : "nothing here"}
           onClose={() => setPaletteOpen(false)}
+        />
+      )}
+
+      {spotlightOpen && active && (
+        <Spotlight
+          cwd={active.cwd}
+          onOpen={openInPane}
+          onClose={() => setSpotlightOpen(false)}
         />
       )}
 
