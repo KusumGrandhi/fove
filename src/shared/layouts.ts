@@ -81,10 +81,15 @@ export const PRESETS: LayoutPreset[] = [
     /*
      * For watching work happen rather than doing it by hand.
      *
-     * Claude on the left at just over half. The right column stacks the two
-     * things you look at *while* it runs: the agent tree (what it is doing now)
-     * above git (what it has changed so far). Agents gets the smaller share
-     * because it is a list of short rows, while a diff needs room to read.
+     * Claude takes the left half, because in this layout the transcript is
+     * the thing you are actually reading -- a swarm announces itself there
+     * first, and a turn's reasoning is what you are following.
+     *
+     * The right column stacks the two things you check *while* it runs: the
+     * subagent tree (what it is doing now) above git (what it has changed so
+     * far). The tree gets the smaller share -- it is a list of short rows --
+     * and git the larger, because the commit form plus a file list needs the
+     * height and a diff needs room to read.
      *
      * No editor: in this layout you are reviewing, and a diff you can act on
      * beats a file you have to navigate to.
@@ -94,9 +99,9 @@ export const PRESETS: LayoutPreset[] = [
     build: ([claude, agents, git]) =>
       branch(
         "row",
-        0.54,
+        0.52,
         leaf(claude!),
-        branch("column", 0.38, leaf(agents!), leaf(git!)),
+        branch("column", 0.4, leaf(agents!), leaf(git!)),
       ),
   },
 
@@ -105,30 +110,36 @@ export const PRESETS: LayoutPreset[] = [
     label: "Dev",
     hint: "Editor, Claude, git and a shell — the full working surface.",
     /*
-     * The one that replaces VS Code.
+     * The one that replaces VS Code, and arranged like it.
      *
-     * The editor is the largest pane and sits top-left, because when you are
-     * in this layout you are reading code. Claude runs down the right at a
-     * full-height third, so a turn stays visible while you work rather than
-     * being something you switch to.
+     * Three full-height columns: git on the left, the code in the middle,
+     * Claude on the right.
      *
-     * Along the bottom of the left column: git and a shell, side by side and
-     * short. Both are glanced at and typed into briefly, neither is read for
-     * long, and giving them a quarter of the height keeps the editor honest.
+     * Git is a column rather than a strip along the bottom because it *is* a
+     * column -- a file list, one path per row, which a quarter of the height
+     * truncates for no reason while the pane sits half empty. Left, at a
+     * fifth of the width, is where a source-control sidebar goes.
+     *
+     * The middle column is the editor over a shell, because a shell is where
+     * you run what you just read; putting them in one column keeps that pair
+     * together and gives the editor the width it needs for real lines of code.
+     *
+     * Claude runs down the right at a full-height quarter, so a turn stays
+     * visible while you work rather than being something you switch to.
      */
-    panes: ["editor", "git", "shell", "claude"],
-    focus: 0,
-    build: ([editor, git, shell, claude]) =>
+    panes: ["git", "editor", "shell", "claude"],
+    focus: 1,
+    build: ([git, editor, shell, claude]) =>
       branch(
         "row",
-        0.66,
+        0.22,
+        leaf(git!),
         branch(
-          "column",
-          0.72,
-          leaf(editor!),
-          branch("row", 0.5, leaf(git!), leaf(shell!)),
+          "row",
+          0.66,
+          branch("column", 0.72, leaf(editor!), leaf(shell!)),
+          leaf(claude!),
         ),
-        leaf(claude!),
       ),
   },
 ];
