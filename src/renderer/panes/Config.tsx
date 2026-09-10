@@ -34,10 +34,13 @@ interface McpServer {
 interface SkillInfo {
   name: string;
   path: string;
+  /** Resolved target when SKILL.md is a symlink (e.g. a gstack bundle). */
+  linkTarget?: string;
   bundle?: string;
   description?: string;
   frontmatterBytes: number;
   usageCount: number;
+  lastUsedAt?: number;
   override?: "on" | "off" | "name-only" | "user-invocable-only";
 }
 
@@ -54,6 +57,13 @@ export function ConfigPane(props: {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [budget, setBudget] = useState<{ tokens: number; enabled: number } | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  /**
+   * The selected skill, kept apart from the agent selection.
+   *
+   * Agents and skills are separate namespaces, so one shared key would let a
+   * skill and an agent of the same name select each other when the tab changes.
+   */
+  const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
 
   const load = useCallback(async () => {
@@ -98,6 +108,17 @@ export function ConfigPane(props: {
     : agents;
   const active = agents.find((a) => a.name === selected) ?? null;
 
+  // Skills filter on the same terms as agents: name, description, bundle.
+  const shownSkills = q
+    ? skills.filter(
+        (s) =>
+          s.name.toLowerCase().includes(q) ||
+          (s.description ?? "").toLowerCase().includes(q) ||
+          (s.bundle ?? "").toLowerCase().includes(q),
+      )
+    : skills;
+  const activeSkill = skills.find((s) => s.name === selectedSkill) ?? null;
+
   return (
     <div style={S.pane}>
       <div style={S.bar}>
@@ -111,7 +132,7 @@ export function ConfigPane(props: {
           skills {skills.length > 0 ? skills.length : ""}
         </button>
         <div style={{ flex: 1 }} />
-        {view === "agents" && (
+        {(view === "agents" || view === "skills") && (
           <input
             style={S.search}
             placeholder="filter…"
@@ -176,72 +197,126 @@ export function ConfigPane(props: {
           )}
         </div>
       ) : view === "skills" ? (
-        <div style={S.list}>
-          {budget && (
-            <div style={S.budget}>
-              <b style={{ color: C.fg }}>~{Math.round(budget.tokens / 100) / 10}k tokens</b>
-              {" "}of descriptions load every session · {budget.enabled} enabled
-              {skills.filter((k) => k.usageCount === 0).length > 0 && (
-                <> · <span style={{ color: "#d29922" }}>
-                  {skills.filter((k) => k.usageCount === 0).length} never used
-                </span></>
+        /*
+         * Master-detail, the same shape as the agents view.
+         *
+         * The row used to carry everything -- state, name, description, cost,
+         * usage and two buttons -- because there was nowhere else to put it,
+         * and at a narrow pane width the buttons clipped. Reading a skill now
+         * happens in the detail panel, so the row is back to three things and
+         * "open" lives where it does for an agent definition.
+         */
+        <div style={S.body}>
+          <div style={S.list}>
+            {budget && (
+              <div style={S.budget}>
+                <b style={{ color: C.fg }}>~{Math.round(budget.tokens / 100) / 10}k tokens</b>
+                {" "}of descriptions load every session · {budget.enabled} enabled
+                {skills.filter((k) => k.usageCount === 0).length > 0 && (
+                  <> · <span style={{ color: "#d29922" }}>
+                    {skills.filter((k) => k.usageCount === 0).length} never used
+                  </span></>
+                )}
+              </div>
+            )}
+            {shownSkills.length === 0 ? (
+              <div style={S.empty}>
+                {skills.length === 0 ? "no skills found" : "nothing matches"}
+              </div>
+            ) : (
+              shownSkills.map((k) => {
+                const state = k.override ?? "on";
+                return (
+                  <div
+                    key={k.name}
+                    style={{ ...S.row, ...(k.name === selectedSkill ? S.rowActive : null) }}
+                    onClick={() => setSelectedSkill(k.name)}
+                    title={k.path}
+                  >
+                    {/*
+                     * The state badge stays in the row and stops the click from
+                     * reaching it: toggling cost is the one action worth doing
+                     * without selecting first, and selecting on toggle would
+                     * swap the detail panel out from under the click.
+                     */}
+                    <button
+                      style={{ ...S.state, ...stateStyle(state) }}
+                      onClick={(e) => { e.stopPropagation(); void toggleSkill(k); }}
+                      title="on -> name -> /only -> off"
+                    >
+                      {stateLabel(state)}
+                    </button>
+                    <span style={S.name}>{k.name}</span>
+                    <span style={S.desc}>{k.description ?? ""}</span>
+                  </div>
+                );
+              })
+            )}
+            {/* Inside the scrolling list, not beside it: S.body is a flex row,
+                so a sibling here would become a third column. */}
+            <div style={S.note}>
+              Sorted by cost per use. Click a skill to read it; <b>open definition</b>
+              {" "}shows its <code>SKILL.md</code> in the editor pane.
+              <b> name</b> sends the skill's name without its description — Claude
+              can still choose it, for a fraction of the tokens, which suits a skill
+              whose name says what it does. <b>/only</b> hides it from Claude
+              entirely but keeps it typeable as <code>/name</code>. <b>off</b> hides
+              it from both. Toggles are written to
+              <code> ~/.claude/settings.json</code>, are reversible, and survive
+              upgrades.
+            </div>
+          </div>
+
+          {activeSkill && (
+            <div style={S.detail}>
+              <div style={S.detailHead}>{activeSkill.name}</div>
+              <Meta label="state" value={stateLabel(activeSkill.override ?? "on")} />
+              {activeSkill.bundle && <Meta label="bundle" value={activeSkill.bundle} />}
+              <Meta label="standing cost" value={`${standingTokens(activeSkill)} tokens`} />
+              <Meta
+                label="used"
+                value={activeSkill.usageCount > 0 ? `${activeSkill.usageCount}×` : "never"}
+              />
+              {/* Only meaningful once it has been used, and misleading at 0. */}
+              {activeSkill.lastUsedAt && (
+                <Meta
+                  label="last used"
+                  value={new Date(activeSkill.lastUsedAt).toLocaleDateString()}
+                />
               )}
+              <div style={S.detailLabel}>description</div>
+              <div style={S.excerpt}>{activeSkill.description || "—"}</div>
+              <div style={S.detailLabel}>path</div>
+              <div style={S.excerpt}>{activeSkill.path}</div>
+              {/* A gstack bundle reaches SKILL.md through a symlink, and the
+                  target is where an edit actually lands. Shown as a block
+                  rather than a Meta row: a path has nothing to wrap at, and
+                  Meta's right-aligned single line just clips it. */}
+              {activeSkill.linkTarget && (
+                <>
+                  <div style={S.detailLabel}>links to</div>
+                  <div style={S.excerpt}>{activeSkill.linkTarget}</div>
+                </>
+              )}
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  style={S.ghost}
+                  onClick={() => props.onOpen?.(activeSkill.path)}
+                  disabled={!props.onOpen}
+                >
+                  open definition
+                </button>
+                {/* The escape hatch stays, but is no longer the default. */}
+                <button
+                  style={S.ghost}
+                  title="Open in VS Code"
+                  onClick={() => window.th.openInEditor(activeSkill.path)}
+                >
+                  ↗
+                </button>
+              </div>
             </div>
           )}
-          {skills.length === 0 ? (
-            <div style={S.empty}>no skills found</div>
-          ) : (
-            skills.map((k) => {
-              const state = k.override ?? "on";
-              return (
-                <div key={k.name} style={S.row} title={k.path}>
-                  <button
-                    style={{ ...S.state, ...stateStyle(state) }}
-                    onClick={() => void toggleSkill(k)}
-                    title="on -> name -> /only -> off"
-                  >
-                    {stateLabel(state)}
-                  </button>
-                  {/* Same affordance as an agent definition: the name opens the
-                      SKILL.md in fove's editor, the arrow hands it to VS Code. */}
-                  <span
-                    style={{ ...S.name, ...(props.onOpen ? S.nameOpen : null) }}
-                    onClick={() => props.onOpen?.(k.path)}
-                    title={props.onOpen ? `open ${k.path}` : k.path}
-                  >
-                    {k.name}
-                  </span>
-                  <span style={S.desc}>{k.description ?? ""}</span>
-                  <span style={{ color: C.faint, fontSize: 10 }}>
-                    {standingTokens(k)}t
-                  </span>
-                  <span style={{
-                    color: k.usageCount > 0 ? "#3fb950" : C.faint,
-                    fontSize: 10, minWidth: 46, textAlign: "right",
-                  }}>
-                    {k.usageCount > 0 ? `×${k.usageCount}` : "never"}
-                  </span>
-                  <button
-                    style={S.ghost}
-                    title="Open SKILL.md in VS Code"
-                    onClick={() => window.th.openInEditor(k.path)}
-                  >
-                    ↗
-                  </button>
-                </div>
-              );
-            })
-          )}
-          <div style={S.note}>
-            Sorted by cost per use. Click a name to open its <code>SKILL.md</code>.
-            <b> name</b> sends the skill's name without its description — Claude
-            can still choose it, for a fraction of the tokens, which suits a skill
-            whose name says what it does. <b>/only</b> hides it from Claude
-            entirely but keeps it typeable as <code>/name</code>. <b>off</b> hides
-            it from both. Toggles are written to
-            <code> ~/.claude/settings.json</code>, are reversible, and survive
-            upgrades.
-          </div>
         </div>
       ) : (
         <div style={S.list}>
@@ -385,6 +460,9 @@ const S: Record<string, React.CSSProperties> = {
     background: "#12121a", border: "1px solid #23232c", borderRadius: 4,
     padding: "6px 8px", color: "#c9c9d1", fontSize: 11, lineHeight: 1.5,
     whiteSpace: "pre-wrap", maxHeight: 240, overflow: "auto",
+    // A path has no spaces to wrap at, so pre-wrap alone overflows the panel
+    // and hands it a horizontal scrollbar. Break anywhere instead.
+    overflowWrap: "anywhere",
   },
   empty: { padding: 12, color: C.faint, fontSize: 11 },
   note: { padding: "10px 12px", color: C.faint, fontSize: 10, lineHeight: 1.6 },
