@@ -1,7 +1,7 @@
 import { describe, expect, test, beforeEach } from "vitest";
 import {
   leaf, split, closePane, resize, movePane, place, paneIds, isValid,
-  clampRatio, MIN_RATIO, __resetIds, dropEdge, edgeToSplit, dropPreview, swapPanes, type Node,
+  clampRatio, clampRatioPx, MIN_RATIO, MIN_PANE_PX, __resetIds, dropEdge, edgeToSplit, dropPreview, swapPanes, type Node,
   isPinned, setPanePinned, prunePins, canMovePane, canClosePane,
   movePaneChecked, swapPanesChecked, closePaneChecked,
 } from "../src/shared/layout.js";
@@ -77,6 +77,49 @@ describe("resize", () => {
     const t = split(leaf("p1"), "p1", "p2", "row") as any;
     expect((resize(t, t.id, 0.001) as any).ratio).toBe(MIN_RATIO);
     expect(isValid(resize(t, t.id, 99))).toBe(true);
+  });
+
+  describe("the pixel floor", () => {
+    const branch = () => split(leaf("p1"), "p1", "p2", "row") as any;
+
+    test("a ratio is left alone when both sides clear the minimum", () => {
+      // 1200px branch: 0.5 gives each side 600px, far above the floor.
+      const t = branch();
+      expect((resize(t, t.id, 0.5, 1200) as any).ratio).toBe(0.5);
+    });
+
+    test("stops a drag before either side becomes a sliver", () => {
+      const t = branch();
+      // A tenth of 1200px is 120px -- allowed proportionally, too narrow to use.
+      const after = resize(t, t.id, 0.1, 1200) as any;
+      expect(after.ratio).toBeCloseTo(MIN_PANE_PX / 1200);
+      expect(after.ratio * 1200).toBeGreaterThanOrEqual(MIN_PANE_PX);
+    });
+
+    test("applies to the far side too", () => {
+      const t = branch();
+      const after = resize(t, t.id, 0.98, 1200) as any;
+      expect((1 - after.ratio) * 1200).toBeGreaterThanOrEqual(MIN_PANE_PX);
+    });
+
+    test("a branch too small for two minimums falls back to the ratio clamp", () => {
+      // 400px cannot give both sides 260px; a stuck divider would be worse
+      // than a proportional one, so the proportional clamp still applies.
+      const t = branch();
+      expect((resize(t, t.id, 0.5, 400) as any).ratio).toBe(0.5);
+      expect((resize(t, t.id, 0, 400) as any).ratio).toBe(MIN_RATIO);
+    });
+
+    test("without an extent the behaviour is unchanged", () => {
+      const t = branch();
+      expect((resize(t, t.id, 0.1) as any).ratio).toBe(0.1);
+    });
+
+    test("clampRatioPx tolerates a nonsense extent", () => {
+      expect(clampRatioPx(0.5, 0)).toBe(0.5);
+      expect(clampRatioPx(0.5, -100)).toBe(0.5);
+      expect(clampRatioPx(0.5, NaN)).toBe(0.5);
+    });
   });
 });
 

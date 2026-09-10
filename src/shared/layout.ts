@@ -43,6 +43,34 @@ export const leaf = (paneId: string, id = newId("l")): Leaf => ({ kind: "leaf", 
 export const clampRatio = (r: number): number =>
   Math.max(MIN_RATIO, Math.min(1 - MIN_RATIO, r));
 
+/**
+ * Narrowest a pane may be dragged to, in pixels.
+ *
+ * `MIN_RATIO` alone is not enough, because a ratio is relative to the parent's
+ * slice rather than to the window: three levels down, a tenth of a tenth is a
+ * sliver, which is how a git pane ends up 160px wide with its buttons stacked
+ * three deep and its labels clipped. This is the floor a real pane needs to
+ * render its own controls rather than mangle them.
+ */
+export const MIN_PANE_PX = 260;
+
+/**
+ * Clamp a ratio so neither side falls below `MIN_PANE_PX` of `extent`.
+ *
+ * `extent` is the branch's own width (for a row) or height (for a column), in
+ * pixels -- not the window's. When the branch is too small to give both sides
+ * the minimum, the ratio is left at the proportional clamp: refusing to resize
+ * at all would strand a pane that is already too narrow, and the honest
+ * outcome there is a layout change, not a stuck divider.
+ */
+export const clampRatioPx = (r: number, extent: number): number => {
+  const floor = clampRatio(r);
+  if (!Number.isFinite(extent) || extent <= 0) return floor;
+  if (extent < MIN_PANE_PX * 2) return floor;
+  const min = MIN_PANE_PX / extent;
+  return Math.max(min, Math.min(1 - min, floor));
+};
+
 /** Depth-first list of every leaf, left-to-right / top-to-bottom. */
 export function leaves(node: Node): Leaf[] {
   return node.kind === "leaf" ? [node] : [...leaves(node.a), ...leaves(node.b)];
@@ -108,11 +136,26 @@ export function closePane(root: Node, paneId: string): Node | null {
 }
 
 /** Set a branch's ratio, clamped so neither side can be crushed. */
-export function resize(root: Node, branchId: string, ratio: number): Node {
+export function resize(
+  root: Node,
+  branchId: string,
+  ratio: number,
+  /**
+   * The branch's extent in pixels, when the caller knows it -- a drag does.
+   * Given, the clamp is a pixel floor rather than only a proportional one, so
+   * a nested pane cannot be squeezed to a sliver.
+   */
+  extent?: number,
+): Node {
   if (root.kind === "leaf") return root;
-  if (root.id === branchId) return { ...root, ratio: clampRatio(ratio) };
-  const a = resize(root.a, branchId, ratio);
-  const b = resize(root.b, branchId, ratio);
+  if (root.id === branchId) {
+    return {
+      ...root,
+      ratio: extent === undefined ? clampRatio(ratio) : clampRatioPx(ratio, extent),
+    };
+  }
+  const a = resize(root.a, branchId, ratio, extent);
+  const b = resize(root.b, branchId, ratio, extent);
   return a === root.a && b === root.b ? root : { ...root, a, b };
 }
 

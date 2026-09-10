@@ -143,7 +143,11 @@ export function Workspace(props: WorkspaceProps) {
       if (!drag) return;
       const pos = drag.dir === "row" ? px : py;
       const usable = Math.max(1, drag.extent - gap);
-      props.onTreeChange(resize(props.tree, drag.branchId, (pos - drag.origin) / usable));
+      // `usable` is this branch's own extent, which is what turns the clamp
+      // into a pixel floor: a tenth of a nested branch is not a usable pane.
+      props.onTreeChange(
+        resize(props.tree, drag.branchId, (pos - drag.origin) / usable, usable),
+      );
     },
     [gap, props, panes, pins],
   );
