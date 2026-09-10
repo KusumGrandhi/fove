@@ -371,7 +371,13 @@ export function App() {
       else if (e.key === "k") { e.preventDefault(); doSplit("row", "config"); }
       else if (e.key === "b") { e.preventDefault(); doSplit("row", "browser"); }
       else if (e.key === "f" && e.shiftKey) { e.preventDefault(); doSplit("row", "search"); }
-      else if (e.key === "l") { e.preventDefault(); openKeelRef.current(); }
+      /*
+       * ⌘L disabled for now, deliberately left in place rather than deleted.
+       *
+       * Keel itself, its palette entry and `openKeel` are all untouched --
+       * only the shortcut is off, so re-enabling is uncommenting this line.
+       */
+      // else if (e.key === "l") { e.preventDefault(); openKeelRef.current(); }
       else if (e.key === "o" || e.key === "O") { e.preventDefault(); openPaletteRef.current(); }
       else if (e.key === "p" && e.shiftKey) { e.preventDefault(); togglePin(activeTabId); }
       else if (e.key === "p") { e.preventDefault(); if (active) togglePanePin(active.focusedPaneId); }
@@ -747,7 +753,26 @@ export function App() {
     }
 
     items.push(
-      cmd("cmd:keel", "What changed in the last turn", "⌘L", () => openKeelRef.current()),
+      /*
+       * Keel, badged Alpha and with no shortcut.
+       *
+       * ⌘L is disabled for now, so the hint is empty -- advertising a key
+       * that does nothing is worse than showing none. Alpha, not Beta: this
+       * one is unreliable rather than merely unfinished, and a badge that
+       * oversells it would cost more trust than the entry is worth.
+       *
+       * Written as a literal rather than through `cmd()` because badges are
+       * not part of that helper's four arguments, and widening it for one
+       * caller is worse than one explicit item.
+       */
+      {
+        id: "cmd:keel",
+        label: "What changed in the last turn",
+        icon: "›",
+        hint: "",
+        badges: [{ text: "Alpha", tone: C.red }],
+        run: () => openKeelRef.current(),
+      },
       cmd("cmd:claude", "New Claude pane", "⌘↵", () => doSplit("row", "claude")),
       cmd("cmd:shell", "New shell pane", "", () => doSplit("row", "shell")),
       cmd("cmd:editor", "Editor", "⌘E", () => doSplit("row", "editor")),

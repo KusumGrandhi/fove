@@ -128,7 +128,19 @@ const S: Record<string, React.CSSProperties> = {
   rowOn: { background: C.chromeHi },
   icon: { width: 15, textAlign: "center", color: C.faint, flexShrink: 0 },
   label: { overflow: "hidden", textOverflow: "ellipsis" },
-  badge: { fontSize: 10, fontFamily: "Menlo, monospace", flexShrink: 0 },
+  /*
+   * Outlined, so a word reads as a tag.
+   *
+   * The counts these were built for -- "● 3", "↑2" -- carry their meaning in
+   * the glyph and were legible as bare text. A word like "Beta" is not: it
+   * looks like part of the label until it has a border around it. The colour
+   * still comes from each badge's own tone.
+   */
+  badge: {
+    fontSize: 9.5, fontFamily: "Menlo, monospace", flexShrink: 0,
+    border: "1px solid currentColor", borderRadius: 3,
+    padding: "0 4px", lineHeight: "14px", opacity: 0.85,
+  },
   hint: { color: C.faint, fontSize: 10, flexShrink: 0 },
   none: { padding: "14px", color: C.faint, textAlign: "center" },
 };
