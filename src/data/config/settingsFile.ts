@@ -82,11 +82,26 @@ export async function setSkillOverride(
   return next;
 }
 
-/** Cycle a skill through the three useful states. */
+/**
+ * Cycle a skill through the four states Claude Code supports, cheapest-first
+ * after "on": on -> name-only -> /only -> off -> on.
+ *
+ * "name-only" sits between the two extremes for a reason: the model still sees
+ * the skill and can still choose it, but pays the name instead of the whole
+ * description. For a skill whose name says what it does -- /review, /health --
+ * that is most of the value of "on" at a fraction of the cost, and it is the
+ * only state that keeps a skill model-reachable while shrinking it.
+ */
 export function nextOverride(current: SkillOverride | undefined): SkillOverride {
-  return current === undefined || current === "on"
-    ? "user-invocable-only"
-    : current === "user-invocable-only"
-      ? "off"
-      : "on";
+  switch (current) {
+    case undefined:
+    case "on":
+      return "name-only";
+    case "name-only":
+      return "user-invocable-only";
+    case "user-invocable-only":
+      return "off";
+    default:
+      return "on";
+  }
 }

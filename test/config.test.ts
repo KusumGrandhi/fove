@@ -75,6 +75,18 @@ describe("sortSkills / budget", () => {
     const withUio = [...skills, skill({ name: "u", frontmatterBytes: 5000, override: "user-invocable-only" })];
     expect(budget(withUio).bytes).toBe(3300);
   });
+  test("budget charges name-only for its name, not its description", () => {
+    // The whole point of name-only is that it is cheap; billing it the full
+    // frontmatter made the state look pointless in the UI.
+    const withName = [...skills, skill({ name: "review", frontmatterBytes: 5000, override: "name-only" })];
+    expect(budget(withName).bytes).toBe(3300 + "review".length + 2);
+  });
+  test("budget counts a name-only skill as still enabled", () => {
+    // It reaches the model's listing, so it belongs in the count -- unlike
+    // /only and off, which do not.
+    const only = [skill({ name: "review", frontmatterBytes: 5000, override: "name-only" })];
+    expect(budget(only).enabled).toBe(1);
+  });
   test("estTokens approximates 4 chars per token", () => {
     expect(estTokens(23683)).toBe(5921);
   });
@@ -137,9 +149,17 @@ describe("settings writer", () => {
 });
 
 describe("nextOverride", () => {
-  test("cycles on -> user-invocable-only -> off -> on", () => {
-    expect(nextOverride(undefined)).toBe("user-invocable-only");
+  test("cycles on -> name-only -> user-invocable-only -> off -> on", () => {
+    expect(nextOverride(undefined)).toBe("name-only");
+    expect(nextOverride("on")).toBe("name-only");
+    expect(nextOverride("name-only")).toBe("user-invocable-only");
     expect(nextOverride("user-invocable-only")).toBe("off");
     expect(nextOverride("off")).toBe("on");
+  });
+
+  test("four clicks return a skill to where it started", () => {
+    let s = nextOverride(undefined);
+    for (let i = 0; i < 3; i++) s = nextOverride(s);
+    expect(s).toBe("on");
   });
 });

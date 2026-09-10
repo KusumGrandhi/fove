@@ -147,9 +147,31 @@ export function sortSkills(skills: SkillInfo[], by: SkillSort): SkillInfo[] {
   }
 }
 
-/** Total standing context cost of the enabled skills. */
+/**
+ * Standing cost of one skill, by state.
+ *
+ * "off" and "user-invocable-only" send nothing. "name-only" sends the name and
+ * not the description, so charging it the whole frontmatter -- as this did
+ * before the state existed -- overstated it by roughly an order of magnitude
+ * and made the cheap state look like it saved nothing. The two bytes cover the
+ * list punctuation around the name; it is an estimate either way, but an
+ * honest one.
+ */
+function standingBytes(s: SkillInfo): number {
+  switch (s.override) {
+    case "off":
+    case "user-invocable-only":
+      return 0;
+    case "name-only":
+      return s.name.length + 2;
+    default:
+      return s.frontmatterBytes;
+  }
+}
+
+/** Total standing context cost of the skills that still send something. */
 export function budget(skills: SkillInfo[]): { bytes: number; tokens: number; enabled: number } {
-  const enabled = skills.filter((s) => s.override !== "off" && s.override !== "user-invocable-only");
-  const bytes = enabled.reduce((n, s) => n + s.frontmatterBytes, 0);
+  const enabled = skills.filter((s) => standingBytes(s) > 0);
+  const bytes = enabled.reduce((n, s) => n + standingBytes(s), 0);
   return { bytes, tokens: estTokens(bytes), enabled: enabled.length };
 }

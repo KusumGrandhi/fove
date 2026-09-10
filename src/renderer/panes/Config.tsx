@@ -72,11 +72,13 @@ export function ConfigPane(props: {
   }, [props.cwd]);
 
   /**
-   * Cycle a skill: on -> user-invocable-only -> off.
+   * Cycle a skill: on -> name -> /only -> off.
    *
-   * The middle state is the useful one: the skill stays typeable as /name but
-   * stops spending description tokens on every session and stops competing for
-   * Claude's attention. Writes to ~/.claude/settings.json, never ~/.claude.json.
+   * The two middle states are the useful ones. "name" keeps the skill
+   * model-reachable for a fraction of the cost -- worth it where the name
+   * alone says what the skill does. "/only" keeps it typeable as /name but
+   * hides it from Claude entirely. Writes to ~/.claude/settings.json, never
+   * ~/.claude.json.
    */
   const toggleSkill = useCallback(async (sk: SkillInfo) => {
     await window.th.skillsToggle(sk.name, sk.override);
@@ -196,14 +198,22 @@ export function ConfigPane(props: {
                   <button
                     style={{ ...S.state, ...stateStyle(state) }}
                     onClick={() => void toggleSkill(k)}
-                    title="on -> user-invocable-only -> off"
+                    title="on -> name -> /only -> off"
                   >
-                    {state === "on" ? "on" : state === "off" ? "off" : "/only"}
+                    {stateLabel(state)}
                   </button>
-                  <span style={S.name}>{k.name}</span>
+                  {/* Same affordance as an agent definition: the name opens the
+                      SKILL.md in fove's editor, the arrow hands it to VS Code. */}
+                  <span
+                    style={{ ...S.name, ...(props.onOpen ? S.nameOpen : null) }}
+                    onClick={() => props.onOpen?.(k.path)}
+                    title={props.onOpen ? `open ${k.path}` : k.path}
+                  >
+                    {k.name}
+                  </span>
                   <span style={S.desc}>{k.description ?? ""}</span>
                   <span style={{ color: C.faint, fontSize: 10 }}>
-                    {Math.round(k.frontmatterBytes / 4)}t
+                    {standingTokens(k)}t
                   </span>
                   <span style={{
                     color: k.usageCount > 0 ? "#3fb950" : C.faint,
@@ -211,14 +221,24 @@ export function ConfigPane(props: {
                   }}>
                     {k.usageCount > 0 ? `×${k.usageCount}` : "never"}
                   </span>
+                  <button
+                    style={S.ghost}
+                    title="Open SKILL.md in VS Code"
+                    onClick={() => window.th.openInEditor(k.path)}
+                  >
+                    ↗
+                  </button>
                 </div>
               );
             })
           )}
           <div style={S.note}>
-            Sorted by cost per use. <b>/only</b> keeps a skill typeable as
-            <code> /name</code> but stops it spending description tokens every
-            session and competing for Claude's attention. Toggles are written to
+            Sorted by cost per use. Click a name to open its <code>SKILL.md</code>.
+            <b> name</b> sends the skill's name without its description — Claude
+            can still choose it, for a fraction of the tokens, which suits a skill
+            whose name says what it does. <b>/only</b> hides it from Claude
+            entirely but keeps it typeable as <code>/name</code>. <b>off</b> hides
+            it from both. Toggles are written to
             <code> ~/.claude/settings.json</code>, are reversible, and survive
             upgrades.
           </div>
@@ -278,12 +298,40 @@ const sourceStyle = (source: string): React.CSSProperties => ({
   color: source === "user" || source === "project" ? "#3fb950" : "#8b949e",
 });
 
+/**
+ * Four states, four labels. "name" is short for name-only: Claude sees the
+ * skill's name but not its description.
+ */
+const stateLabel = (state: string): string =>
+  state === "on" ? "on" : state === "off" ? "off" : state === "name-only" ? "name" : "/only";
+
+/**
+ * Colour tracks cost, not alphabetical order: green is fully on, red is fully
+ * off, and the two middle states share the amber family -- name-only brighter
+ * than /only, because it is the one Claude can still reach.
+ */
 const stateStyle = (state: string): React.CSSProperties =>
   state === "on"
     ? { background: "#12261a", color: "#3fb950", borderColor: "#1d4429" }
     : state === "off"
       ? { background: "#2a1214", color: "#f85149", borderColor: "#6e2b30" }
-      : { background: "#2a2418", color: "#d29922", borderColor: "#3d3527" };
+      : state === "name-only"
+        ? { background: "#1d2733", color: "#58a6ff", borderColor: "#24384f" }
+        : { background: "#2a2418", color: "#d29922", borderColor: "#3d3527" };
+
+/**
+ * What this skill actually costs per session, in tokens.
+ *
+ * Mirrors `standingBytes` in data/config/skills.ts: a name-only skill sends
+ * its name, not its description, and showing it the full frontmatter cost
+ * would contradict the budget line directly above the list.
+ */
+const standingTokens = (k: SkillInfo): number => {
+  const state = k.override ?? "on";
+  if (state === "off" || state === "user-invocable-only") return 0;
+  if (state === "name-only") return Math.round((k.name.length + 2) / 4);
+  return Math.round(k.frontmatterBytes / 4);
+};
 
 const S: Record<string, React.CSSProperties> = {
   budget: {
@@ -319,6 +367,7 @@ const S: Record<string, React.CSSProperties> = {
   },
   rowActive: { background: "#161c28" },
   name: { color: C.fg, flex: "0 0 auto" },
+  nameOpen: { cursor: "pointer", textDecoration: "underline", textDecorationColor: "#33333d" },
   desc: {
     color: C.faint, flex: 1, overflow: "hidden",
     textOverflow: "ellipsis", whiteSpace: "nowrap",
