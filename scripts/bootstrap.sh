@@ -53,14 +53,33 @@ bold "Tools"
 MISSING_REQUIRED=()
 MISSING_BREW=()
 
-# bin:severity:brew-formula-or-empty:what-it-is-for
-TOOLS=(
-  "claude:required::Claude Code itself — every claude pane"
-  "git:required:git:the git pane, worktrees, diffs"
-  "tmux:feature:tmux:teammate tabs"
-  "rg:feature:ripgrep:the search pane"
-  "code:optional::the open-in-VS-Code buttons"
-)
+# The list comes from src/shared/deps.ts, so this script and the app's own
+# Setup Check can never disagree about what fove needs -- they did once, and
+# the drift was invisible until someone read both.
+#
+# Parsed with sed rather than node: node is one of the things this script
+# exists to check for, so it cannot be a prerequisite for reading the list.
+# Format emitted per line: bin:severity:brew-formula-or-empty:purpose
+read_deps() {
+  local f="src/shared/deps.ts"
+  [[ -f "$f" ]] || return 1
+  awk '
+    /^  \{$/            { bin=""; sev=""; brew=""; needs=""; next }
+    /^    bin: "/       { match($0, /"[^"]+"/); bin=substr($0, RSTART+1, RLENGTH-2) }
+    /^    severity: "/  { match($0, /"[^"]+"/); sev=substr($0, RSTART+1, RLENGTH-2) }
+    /^    brew: "/      { match($0, /"[^"]+"/); brew=substr($0, RSTART+1, RLENGTH-2) }
+    /^    needs: "/     { match($0, /"[^"]+"/); needs=substr($0, RSTART+1, RLENGTH-2) }
+    /^  \},$/           { if (bin != "") print bin ":" sev ":" brew ":" needs }
+  ' "$f"
+}
+
+TOOLS=()
+while IFS= read -r line; do TOOLS+=("$line"); done < <(read_deps)
+
+if [[ ${#TOOLS[@]:-0} -eq 0 ]]; then
+  bad "Could not read src/shared/deps.ts — run this from the fove repository."
+  exit 1
+fi
 
 for entry in "${TOOLS[@]}"; do
   IFS=":" read -r bin severity formula purpose <<< "$entry"
@@ -102,7 +121,13 @@ if [[ $CHECK_ONLY -eq 1 ]]; then
 fi
 
 if [[ ${#MISSING_REQUIRED[@]:-0} -gt 0 ]]; then
-  bad "Still missing: ${MISSING_REQUIRED[*]:-}. Install them, then re-run."
+  # Singular when there is one, because "Install them" for a single tool
+  # reads as though something else is also wrong.
+  if [[ ${#MISSING_REQUIRED[@]} -eq 1 ]]; then
+    bad "Still missing: ${MISSING_REQUIRED[0]}. Install it, then re-run."
+  else
+    bad "Still missing: ${MISSING_REQUIRED[*]}. Install them, then re-run."
+  fi
   exit 1
 fi
 

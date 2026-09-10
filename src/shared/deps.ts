@@ -78,14 +78,6 @@ export const DEPS: Dep[] = [
     versionArg: "--version",
   },
   {
-    bin: "fd",
-    label: "fd",
-    severity: "feature",
-    needs: "fast file-name lookup in the palette and the editor's file tree.",
-    brew: "fd",
-    versionArg: "--version",
-  },
-  {
     bin: "code",
     label: "VS Code CLI",
     severity: "optional",
