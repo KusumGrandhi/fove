@@ -1,51 +1,52 @@
 # fove
 
-**v0.5**
+**Fully Open Vibe-coding Environment** · v1.0
 
-An AI-optimized developer app. Panes hold anything — a shell, a `claude`
-session, a git surface, an editor, a config browser, an agent tree. Layout is
-yours: split, drag, resize, pin, persist.
+A terminal-first workspace for coding with agents. Panes hold anything — a
+shell, a `claude` session, a git surface, an editor, a file search, a config
+browser, an agent tree, a debugger, a browser. Layout is yours: split, drag,
+resize, pin, persist.
 
 Claude Code runs unmodified inside it, and fove registers itself as Claude's
 IDE, so files and diffs it opens land in fove's own editor rather than
 somewhere else.
 
-See [PLAN.md](PLAN.md) for the architecture, [PLAN-v0.5.md](PLAN-v0.5.md) for
-what this release covered, and [PLAN-v0.7.md](PLAN-v0.7.md) for what is next.
+fove is a shell around real command-line tools rather than a reimplementation
+of them: a claude pane is the real `claude`, the git pane is real `git`, a
+teammate tab is a real tmux pane. **File → Setup Check…** in the menu bar says
+what is installed and offers to fix what Homebrew can.
 
-## What v0.5 added
+See [PLAN.md](PLAN.md) for the architecture, and the per-release plans for
+how it got here: [v0.5](PLAN-v0.5.md), [v0.7](PLAN-v0.7.md), [v0.8](PLAN-v0.8.md),
+[v0.9](PLAN-v0.9.md), [v0.10](PLAN-v0.10.md).
 
-- **Git, writable.** Stage, unstage, discard, commit (with amend), stash,
-  push/pull/fetch, blame, and a commit graph laid out from real parent links.
-  Every failure shows git's own stderr — a rejected push or a failing
-  pre-commit hook is exactly the text you need.
-- **IDE integration.** fove advertises itself in `~/.claude/ide/`, so `/ide`
-  lists it and Claude's `openFile`/`openDiff` land here. A diff Claude is
-  blocked on renders as a real Monaco diff with accept/reject, and accepting
-  actually writes the file.
-- **Editor selection reaches Claude.** Select code, ask about "the highlighted
-  part", and it knows what you mean.
-- **Correct token accounting.** The rail follows the session running in *that
-  pane*, found through the process tree — not whichever transcript in the
-  folder was touched last. Output tokens are counted for CLI transcripts,
-  which previously read zero.
-- **Config browser.** Every agent definition fove can see — yours, the
-  project's, and each plugin's — plus MCP servers and skills, with per-skill
-  toggles and the per-session token cost.
-- **Model picker** including OpenRouter, with Anthropic's unsupported-routing
-  notice quoted rather than paraphrased.
-- **Five themes**, switching live without remounting panes (a remount would
-  kill a running `claude`).
-- **Background sessions** — peer `claude` sessions in the same project, which
-  neither the agent tree nor the teammate bar could see.
-- **Packaged as a real macOS app**, with its own icon.
+## Requirements
 
-Known gaps, carried into v0.7: the editor cannot create, rename or delete
-files; there is no debugger and no browser pane; per-hunk staging has its
-mechanism but no UI; and drag-and-drop moves panes within a tab but not
-between tabs.
+macOS on Apple silicon. `node-pty` is compiled, so there is no x86 build.
+
+| | | |
+|---|---|---|
+| `claude` | required | every claude pane — the app's reason to exist |
+| `git` | required | the git pane, worktrees, diffs, commit graph |
+| `tmux` | feature | teammate tabs; without it a swarm is never detected |
+| `rg` | feature | the search pane |
+| `code` | optional | the "open in VS Code" buttons |
+
+The list lives in [`src/shared/deps.ts`](src/shared/deps.ts); the Setup Check
+dialog and `scripts/bootstrap.sh` both read it, so it cannot drift.
 
 ## Run
+
+```bash
+./scripts/bootstrap.sh   # check tools, brew what it can, build, install
+```
+
+That is the first-run path: it verifies macOS and arch, installs missing
+dependencies Homebrew can provide, refuses to build while a *required* tool is
+missing, then runs `npm ci`, the typecheck, and `install:local`. Pass
+`--check` to report without changing anything.
+
+By hand:
 
 ```bash
 npm install          # postinstall rebuilds node-pty for Electron's ABI
@@ -64,6 +65,11 @@ npm run install:local   # build, sign ad-hoc, copy to /Applications
 Applications folder, like any other app. It is signed ad-hoc rather than with
 an Apple Developer ID, so a copy *downloaded* to another machine would be
 quarantined and need right-click -> Open; a locally built one is not.
+
+**A Finder launch has no working directory.** A double-clicked macOS app
+inherits `/`, which would open a workspace on the filesystem root. fove falls
+back to the last workspace it had open, then to `$HOME` — see
+[`src/shared/launch-cwd.ts`](src/shared/launch-cwd.ts).
 
 **A debugging note worth keeping.** An automated agent running in a sandboxed
 shell cannot launch this app with `open` -- every Electron app fails there with
@@ -98,20 +104,25 @@ Two packaging traps already paid for:
 
 ```
 ┌─ title bar ─────────────────── tabs · + ─────────┐
-├─ toolbar ── Split · Split down · Claude · Shell ·│
-│             Git · New tab            Close pane  │
+├─ toolbar ── AI ▾ · Dev ▾ · Workspace ▾ ──────────┤
 ├──────────────────────────────────────────────────┤
 │  ┌─ workspace ────────────────────────────────┐  │
-│  │ ┌ ❯ shell ──────┐┌ ⎇ git ───────────────┐ │  │
-│  │ │               ││                      │ │  │
-│  │ └───────────────┘└──────────────────────┘ │  │
+│  │ ┌ ⎇ git ──┐┌ ✎ editor ─────┐┌ ✳ claude ─┐ │  │
+│  │ │         ││               ││           │ │  │
+│  │ │         │└───────────────┘│           │ │  │
+│  │ │         │┌ ❯ shell ──────┐│           │ │  │
+│  │ │         ││               ││           │ │  │
+│  │ └─────────┘└───────────────┘└───────────┘ │  │
 │  └────────────────────────────────────────────┘  │
-│  ┌ ⠿ ❯ shell ────┐┌ ⠿ ⎇ git ──────┐  ┌ STATS ─┐  │
-│  │               ││               │  │ widgets│  │
-│  └───────────────┘└───────────────┘  └────────┘  │
-├─ status bar ── 2 panes · tab 1 of 1 ─────────────┤
+├─ status bar ── 3 panes · 1 workspace ────────────┤
 └──────────────────────────────────────────────────┘
 ```
+
+**The toolbar is three hover menus** rather than fifteen buttons: **AI**
+(claude, agents, Keel), **Dev** (git, editor, search, debug, browser) and
+**Workspace** (splits, layouts, theme, close). They open on hover and close on
+a short grace period, so crossing the gap to a submenu does not dismiss them.
+Theme is a submenu of the five themes, ticked to show the current one.
 
 **A tab is a workspace: one directory, with panes inside it.** Every pane in a
 tab — shell, claude, git, editor, agents — uses that tab's directory, so they
@@ -121,57 +132,91 @@ directory, "tab per worktree" and "tab per project" are the same feature: the
 
 The app starts with exactly one workspace, the folder it was launched from.
 
+**Most panes are singletons.** git, editor, search, config, browser, agents and
+debug each exist at most once per workspace — asking for one again focuses the
+one already open instead of splitting the layout further. Only `shell` and
+`claude` are unlimited, because those are the panes you genuinely want several
+of. ⌘D and the explicit Split actions still force a new pane regardless.
+
+**Layout presets** are in the Workspace menu: *lite* (a shell and a claude),
+*dev* (git column, editor over shell, claude on the right) and *agent* (built
+around the agent tree). Picking one replaces the current workspace's layout.
+
 **Pin a workspace** with its ○ icon, right-click, or `⌘⇧P`. Pinned tabs hold the
 front of the bar in the order pinned, and nothing unpinned can displace them —
 new tabs land after the pinned block, and closing a tab never reorders the rest.
-
-Every shortcut is also a toolbar button, and every pane has its own ✕. The
-panes sit inside a framed workspace rather than filling the window edge to edge.
 
 **Drag a pane by its ⠿ header** to move it. Dropping near an edge splits that
 pane (left/right/top/bottom); dropping in the middle swaps the two. A blue
 overlay previews exactly where it will land, amber for a swap.
 
-The **STATS rail** on the right is permanent and currently empty — it is where
-widgets will live.
+**Dividers stop at a minimum.** A pane cannot be dragged below 260px, so a
+divider can no longer reduce a neighbour to an unusable sliver — see
+`MIN_PANE_PX` in [`src/shared/layout.ts`](src/shared/layout.ts). A branch too
+small to give both sides that minimum falls back to a proportional clamp rather
+than freezing the divider.
+
+**The git pane works in a slim column.** Below 520px the diff stacks under the
+file list instead of beside it, and every file row carries its own `+`/`−` so
+staging is per-file rather than all-or-nothing. The graph, stash and worktree
+tabs sit *below* the changes list, and clicking the open tab closes it again.
 
 ## Keys
 
 | | |
 |---|---|
+| `⌘O` | command palette |
+| `⌘↵` | claude pane |
+| `⌘J` | claude pane, split down |
+| `⌘G` | git status + diff |
+| `⌘E` | file editor |
+| `⌘R` | subagent tree + timeline |
+| `⌘K` | config browser |
+| `⌘B` | browser pane |
+| `⌘⇧F` | search |
+| `⌘M` | model picker |
 | `⌘D` | split right |
 | `⌘⇧D` | split down |
-| `⌘↵` | split right, running `claude` |
-| `⌘J` | split down, running `claude` |
-| `⌘G` | split right, git status + diff |
-| `⌘E` | split right, file editor |
-| `⌘R` | split right, subagent tree + timeline |
 | `⌘S` | save the focused editor |
 | `⌘W` | close pane |
 | `⌘T` | open a folder as a new workspace |
+| `⌘P` | pin / unpin the focused pane |
 | `⌘⇧P` | pin / unpin the active workspace |
 | `⌘1..9` | switch tab |
+
+The pane keys focus an existing singleton rather than splitting again. `⌘S` is
+handled by the editor itself, so it only fires when an editor has focus.
+
+`⌘L` (Keel) is currently unbound — the feature is Alpha and is reachable from
+the ⌘O palette, where it is badged as such.
 
 Drag a divider to resize. Click a pane to focus it.
 
 ## Layers
 
 ```
-app shell      tabs · keymap                 src/renderer/App.tsx
+app shell      tabs · keymap · menus         src/renderer/App.tsx
 layout engine  split tree · geometry         src/shared/layout.ts   (pure, tested)
-pane kinds     terminal · git · editor ·      src/renderer/panes/
-               agents
-services       pty · store                   src/main/
+pane kinds     shell · claude · git ·        src/renderer/panes/
+               editor · agents · config ·
+               search · browser · debug
+services       pty · git · teams · doctor    src/main/
+pure logic     layout · git-parse · deps ·   src/shared/           (pure, tested)
+               tree-rows · launch-cwd
 ```
+
+**Everything interesting lives in `src/shared/` and has no React and no
+Electron in it**, which is why 749 tests across 52 files can cover it without
+launching an app: `layout.ts` (splitting, closing, resizing, re-parenting),
+`git-parse.ts` (every shape git can emit), `tree-rows.ts` (the editor tree's
+flatten and reveal), `deps.ts` (what the machine needs) and `launch-cwd.ts`
+(which folder a workspace opens in).
 
 `src/shared/git-parse.ts` is likewise pure string -> data, so every shape git
 can emit (renames, spaces in filenames, unmerged, detached HEAD, binary) is
 tested without a repository. Porcelain v2 with `-z` is used deliberately: it is
 the only form that survives filenames containing spaces or newlines.
 
-`src/shared/layout.ts` is deliberately free of React and Electron: splitting,
-closing, resizing and re-parenting are where an app like this usually breaks,
-so they are proven in isolation before any pixels exist.
 
 ## Notes for future me
 
@@ -207,7 +252,18 @@ the live tmux socket (what they are doing now).
 
 They surface as a sub-tab bar that exists only while a swarm is running — it
 appears when agents start, disappears when the last finishes, and opens nothing
-unless clicked. `capture-pane` reads output; `send-keys` types into the pane.
+unless clicked.
+
+**A teammate tab is a real terminal, one agent per tab.** Opening one runs
+`tmux attach` against that teammate's own window, so you type directly into
+that `claude` — no snapshot, no one-line input box. Since `attach` targets a
+*window* rather than a pane, the tab first `break-pane -d`s the teammate into
+its own window and `join-pane -d`s it back on close, which is what keeps one
+tab from showing every teammate's output at once.
+
+`capture-pane` is still used for the read-only preview in the agents pane, with
+`-J` so a wrapped line arrives whole — without it a 120-character line comes
+back as 43.
 
 **tmux does not pass a literal tab through `-F`** — it arrives as `_`, so a
 format string using `\t` silently produces one unsplittable field. Fields use
