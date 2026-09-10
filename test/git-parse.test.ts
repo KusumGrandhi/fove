@@ -64,6 +64,19 @@ describe("parseStatus", () => {
     expect(f[2]).toMatchObject({ path: "conflict.ts", staged: "unmerged" });
   });
 
+  test("lists every file in a new directory, not the directory", () => {
+    // What `--untracked-files=all` emits. Git's default would collapse all
+    // three into a single `? newdir/` entry, which cannot be staged per file.
+    const out = `? newdir/one.py${Z}? newdir/sub/three.py${Z}? newdir/two.py${Z}`;
+    const f = parseStatus(out).files;
+    expect(f.map((x) => x.path)).toEqual([
+      "newdir/one.py",
+      "newdir/sub/three.py",
+      "newdir/two.py",
+    ]);
+    expect(f.every((x) => x.unstaged === "untracked")).toBe(true);
+  });
+
   test("a clean repo yields no files", () => {
     expect(parseStatus(`# branch.head main${Z}`).files).toEqual([]);
     expect(parseStatus("").files).toEqual([]);

@@ -18,6 +18,7 @@ import htmlWorker from "../../../node_modules/monaco-editor/esm/vs/language/html
 import tsWorker from "../../../node_modules/monaco-editor/esm/vs/language/typescript/ts.worker.js?worker";
 import { C } from "../ui/Chrome.js";
 import { ContextMenu, type MenuItem } from "../ui/ContextMenu.js";
+import { flattenTree, ancestorsWithin } from "../../shared/tree-rows.js";
 
 interface OpenFile {
   path: string;
@@ -221,7 +222,15 @@ export function EditorPane(props: {
   const modelsRef = useRef<Map<string, monaco.editor.ITextModel>>(new Map());
 
   const [dir, setDir] = useState(props.cwd);
-  const [entries, setEntries] = useState<Entry[]>([]);
+  /**
+   * Listings by directory, for the whole visible tree.
+   *
+   * A missing key means "not fetched yet" rather than "empty", which is what
+   * lets an expand render instantly and fill in when the read lands.
+   */
+  const [children, setChildren] = useState<Map<string, Entry[]>>(new Map());
+  /** Which directories are expanded. Paths, so it survives a re-listing. */
+  const [open, setOpen] = useState<Set<string>>(new Set());
   const [files, setFiles] = useState<OpenFile[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -252,12 +261,89 @@ export function EditorPane(props: {
   }, [activePath]);
 
   // ---- file tree ----------------------------------------------------------
-  const listDir = useCallback(async (d: string) => {
-    setDir(d);
-    setEntries((await window.th.fileList(d)) as Entry[]);
+
+  /** Fetch one directory's listing into the cache, replacing any previous. */
+  const loadDir = useCallback(async (d: string) => {
+    const entries = (await window.th.fileList(d)) as Entry[];
+    setChildren((prev) => new Map(prev).set(d, entries));
+    return entries;
   }, []);
 
-  useEffect(() => { void listDir(props.cwd); }, [props.cwd, listDir]);
+  /**
+   * Re-read every directory currently on screen.
+   *
+   * The watcher and every mutating action land here. Refreshing only the root
+   * would leave an expanded subdirectory showing a file that has since been
+   * renamed or deleted, and the editor's mtime guard would then reject the
+   * next save with a conflict the user cannot see the cause of.
+   */
+  const refresh = useCallback(async () => {
+    const dirs = [dir, ...open];
+    const listings = await Promise.all(
+      dirs.map(async (d) => [d, (await window.th.fileList(d)) as Entry[]] as const),
+    );
+    setChildren((prev) => {
+      const next = new Map(prev);
+      for (const [d, entries] of listings) next.set(d, entries);
+      return next;
+    });
+  }, [dir, open]);
+
+  /** Move the tree's root, discarding expansion state that no longer applies. */
+  const rootTo = useCallback(async (d: string) => {
+    setDir(d);
+    setOpen(new Set());
+    setChildren(new Map());
+    await loadDir(d);
+  }, [loadDir]);
+
+  /**
+   * Expand or collapse a directory, fetching its children on first open.
+   *
+   * The listing is kept after a collapse: reopening a directory is the common
+   * motion, and a cached listing makes it instant. The watcher keeps it honest.
+   */
+  const toggleDir = useCallback(async (path: string) => {
+    let opened = false;
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else { next.add(path); opened = true; }
+      return next;
+    });
+    if (opened && !children.has(path)) await loadDir(path);
+  }, [children, loadDir]);
+
+  useEffect(() => { void rootTo(props.cwd); }, [props.cwd, rootTo]);
+
+  /**
+   * Reveal the active file: expand every directory between the root and it.
+   *
+   * Without this the tree keeps showing wherever it was last navigated, so a
+   * file opened from the palette, a diff hunk or a search hit appears in the
+   * editor with no indication of where in the project it came from.
+   *
+   * A file outside the root is left alone rather than re-rooting the tree --
+   * `ancestorsWithin` returns nothing for it. Opening something from another
+   * worktree should not silently relocate the sidebar.
+   */
+  useEffect(() => {
+    if (!activePath) return;
+    const chain = ancestorsWithin(dir, activePath);
+    if (chain.length === 0) return;
+
+    setOpen((prev) => {
+      // Only grow the set: collapsing what the user opened by hand would
+      // undo their navigation every time a file opens.
+      if (chain.every((d) => prev.has(d))) return prev;
+      const next = new Set(prev);
+      for (const d of chain) next.add(d);
+      return next;
+    });
+    // Fetch whatever the newly-opened directories have not loaded. Awaiting
+    // in sequence would stall the reveal on the deepest level.
+    void Promise.all(chain.filter((d) => !children.has(d)).map(loadDir));
+  }, [activePath, dir, children, loadDir]);
 
   // ---- open / save --------------------------------------------------------
   const openFile = useCallback(async (path: string) => {
@@ -394,9 +480,9 @@ export function EditorPane(props: {
     const r = (await fn()) as { ok: boolean; error?: string; path?: string };
     if (!r?.ok) setTreeError(r?.error ?? "operation failed");
     else setTreeError(null);
-    await listDir(dir);
+    await refresh();
     return r;
-  }, [dir, listDir]);
+  }, [refresh]);
 
   /**
    * Rename, moving any open editor tab with the file.
@@ -472,15 +558,21 @@ export function EditorPane(props: {
     else await runFs(() => window.th.fsCreateDir(`${dir}/${name}`));
   }, [editing, renameEntry, runFs, dir]);
 
-  // Keep the tree live: an agent changing a file is the normal case here, and
-  // a stale list also makes the editor's mtime guard reject the next save.
+  /**
+   * Keep the tree live: an agent changing a file is the normal case here, and
+   * a stale list also makes the editor's mtime guard reject the next save.
+   *
+   * Every expanded directory is watched, not just the root -- a file created
+   * three levels down is exactly the case the tree is now able to show.
+   */
   useEffect(() => {
-    window.th.fsWatch([dir]);
+    const watched = [dir, ...open];
+    window.th.fsWatch(watched);
     const off = window.th.onFsChanged((changed) => {
-      if (changed === dir) void listDir(dir);
+      if (watched.includes(changed)) void refresh();
     });
     return off;
-  }, [dir, listDir]);
+  }, [dir, open, refresh]);
 
   // ---- monaco lifecycle ---------------------------------------------------
   useEffect(() => {
@@ -622,6 +714,8 @@ export function EditorPane(props: {
   }, [save]);
 
   const parent = dir.replace(/\/[^/]+$/, "") || "/";
+  /** The visible tree, depth-first, following what is expanded. */
+  const rows = flattenTree(dir, children, open);
 
   return (
     <div style={S.pane}>
@@ -680,7 +774,7 @@ export function EditorPane(props: {
             }}
           >
             <div style={S.treePath} title={dir}>
-              <button style={S.upBtn} onClick={() => void listDir(parent)} title="Parent folder">↑</button>
+              <button style={S.upBtn} onClick={() => void rootTo(parent)} title="Parent folder">↑</button>
               <span style={S.ellipsis}>{dir.split("/").pop() || "/"}</span>
             </div>
             {/* Naming a new file or folder happens in place, at the top. */}
@@ -703,10 +797,10 @@ export function EditorPane(props: {
               </div>
             )}
 
-            {entries.map((e) =>
+            {rows.map((e) =>
               editing?.mode === "rename" && editing.path === e.path ? (
-                <div key={e.path} style={S.treeRow}>
-                  <span style={{ width: 13 }}>{e.dir ? "▸" : "·"}</span>
+                <div key={e.path} style={{ ...S.treeRow, paddingLeft: indent(e.depth) }}>
+                  <span style={{ width: 13 }}>{e.dir ? (e.open ? "▾" : "▸") : "·"}</span>
                   <input
                     autoFocus
                     style={S.inlineInput}
@@ -723,26 +817,27 @@ export function EditorPane(props: {
               ) : (
                 <div
                   key={e.path}
-                  onClick={() => (e.dir ? void listDir(e.path) : void openFile(e.path))}
+                  onClick={() => (e.dir ? void toggleDir(e.path) : void openFile(e.path))}
                   onContextMenu={(ev) => {
                     ev.preventDefault();
                     setMenu({ x: ev.clientX, y: ev.clientY, path: e.path, dir: e.dir });
                   }}
                   style={{
                     ...S.treeRow,
+                    paddingLeft: indent(e.depth),
                     color: e.path === activePath ? C.fg : e.dir ? C.dim : C.faint,
                     background: e.path === activePath ? "#1e2636" : undefined,
                   }}
                   title={e.path}
                 >
-                  <span style={{ width: 13 }}>{e.dir ? "▸" : "·"}</span>
+                  <span style={{ width: 13 }}>{e.dir ? (e.open ? "▾" : "▸") : "·"}</span>
                   <span style={S.ellipsis}>{e.name}</span>
                 </div>
               ),
             )}
 
             {treeError && <div style={S.treeError}>{treeError}</div>}
-            {entries.length === 0 && <div style={S.treeEmpty}>empty</div>}
+            {rows.length === 0 && <div style={S.treeEmpty}>empty</div>}
           </div>
         )}
 
@@ -767,6 +862,16 @@ export function EditorPane(props: {
       )}
     </div>
   );
+}
+
+/**
+ * Left padding for a row at `depth`.
+ *
+ * The tree is only 190px wide, so the step is small: deep paths need to stay
+ * legible rather than run out of room for the filename.
+ */
+function indent(depth: number): number {
+  return 8 + depth * 10;
 }
 
 const S: Record<string, React.CSSProperties> = {
