@@ -64,6 +64,7 @@ import { listMemories } from "../data/config/memory.js";
 import { readSettings, setSkillOverride, nextOverride } from "../data/config/settingsFile.js";
 import { listSessions } from "../data/transcript.js";
 import { openInEditor, revealInFinder } from "./openExternal.js";
+import { installMenu } from "./menu.js";
 import { loadState, saveState } from "./store.js";
 import { CH, type SpawnRequest } from "../shared/ipc.js";
 
@@ -89,6 +90,11 @@ const ptys = new PtyService(
 );
 
 function createWindow(): void {
+  // The menu is global rather than per-window, so it is installed once here
+  // and reads the current window lazily -- a menu built against a window that
+  // has since closed would parent its dialogs to nothing.
+  installMenu(() => win);
+
   win = new BrowserWindow({
     width: 1440,
     height: 900,
