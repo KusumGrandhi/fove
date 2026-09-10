@@ -124,6 +124,8 @@ export const CH = {
   teamCapture: "teams:capture",
   teamSend: "teams:send",
   teamInterrupt: "teams:interrupt",
+  teamIsolate: "teams:isolate",
+  teamRejoin: "teams:rejoin",
   bgSessions: "sessions:background",
   providers: "models:providers",
   agentsList: "config:agents",

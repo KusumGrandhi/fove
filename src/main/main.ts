@@ -537,6 +537,10 @@ ipcMain.handle(CH.teamCapture, (_e, socket: string, paneId: string, lines?: numb
 ipcMain.handle(CH.teamSend, (_e, socket: string, paneId: string, text: string) =>
   teamSvc.send(socket, paneId, text),
 );
+ipcMain.handle(CH.teamIsolate, (_e, socket: string, paneId: string) =>
+  teamSvc.isolate(socket, paneId));
+ipcMain.handle(CH.teamRejoin, (_e, socket: string, paneId: string, windowId: string) =>
+  teamSvc.rejoin(socket, paneId, windowId));
 ipcMain.handle(CH.teamInterrupt, (_e, socket: string, paneId: string) =>
   teamSvc.interrupt(socket, paneId),
 );

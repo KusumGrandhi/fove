@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { C } from "./Chrome.js";
+import { TerminalPane } from "../panes/Terminal.js";
 
 export interface Teammate {
   agentId: string;
@@ -103,40 +104,44 @@ export function TeammateBar(props: {
 
 /** Live view of one teammate: its output, with a way to talk back. */
 export function TeammateView(props: { socket: string; mate: Teammate; onClose: () => void }) {
-  const [text, setText] = useState("");
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-  const bodyRef = useRef<HTMLPreElement>(null);
-  const pinned = useRef(true);
+  /**
+   * The window this teammate's pane was moved into, once isolated.
+   *
+   * Claude Code tiles every teammate into one window, so attaching to the
+   * pane still renders all five -- `-t <pane>` only picks the active one.
+   * The pane is given a window of its own first, and that window is what the
+   * terminal attaches to. Null means not yet isolated (or tmux refused), and
+   * the terminal waits rather than attaching to the tiled view.
+   */
+  const [windowId, setWindowId] = useState<string | null>(null);
+  /** Where the pane came from, so closing can put it back. */
+  const originRef = useRef<string | null>(null);
 
   const paneId = props.mate.tmuxPaneId!;
 
+  /*
+   * Isolate on entering attached mode, and put it back on leaving.
+   *
+   * The rejoin is in the cleanup rather than in the close handler so it also
+   * runs when the tab is switched away or the component unmounts -- closing
+   * is not the only way to stop looking at a teammate.
+   */
   useEffect(() => {
-    let alive = true;
-    const tick = async () => {
-      const out = await window.th.teamCapture(props.socket, paneId, 400);
-      if (!alive) return;
-      setText(out.replace(/\n{3,}/g, "\n\n").trimEnd());
+    let cancelled = false;
+    void (async () => {
+      const r = await window.th.teamIsolate(props.socket, paneId);
+      if (cancelled || !r) return;
+      originRef.current = r.origin;
+      setWindowId(r.window);
+    })();
+    return () => {
+      cancelled = true;
+      setWindowId(null);
+      const origin = originRef.current;
+      if (origin) void window.th.teamRejoin(props.socket, paneId, origin);
     };
-    void tick();
-    const h = setInterval(tick, 1200);
-    return () => { alive = false; clearInterval(h); };
   }, [props.socket, paneId]);
 
-  // Follow the tail unless the reader has scrolled up.
-  useEffect(() => {
-    const el = bodyRef.current;
-    if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [text]);
-
-  const send = useCallback(async () => {
-    const t = draft.trim();
-    if (!t) return;
-    setBusy(true);
-    await window.th.teamSend(props.socket, paneId, t);
-    setDraft("");
-    setBusy(false);
-  }, [draft, props.socket, paneId]);
 
   const interrupt = useCallback(async () => {
     await window.th.teamInterrupt(props.socket, paneId);
@@ -158,30 +163,36 @@ export function TeammateView(props: { socket: string; mate: Teammate; onClose: (
         <button onClick={props.onClose} style={S.act}>close</button>
       </div>
 
-      <pre
-        ref={bodyRef}
-        style={S.body}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-        }}
-      >
-        {text || "(waiting for output…)"}
-      </pre>
-
-      <div style={S.inputRow}>
-        <span style={{ color: tint }}>❯</span>
-        <input
-          value={draft}
-          disabled={busy}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            e.stopPropagation(); // do not trigger app shortcuts while typing
-            if (e.key === "Enter") void send();
-          }}
-          placeholder={`talk to ${props.mate.name}…`}
-          style={S.input}
-        />
+      {/*
+        * A real terminal on the teammate's isolated window.
+        *
+        * There is no second "snapshot" mode any more. It polled
+        * `capture-pane` every 1.2s into a <pre> and offered a one-line text
+        * box, and every reason to keep it turned out to be unreachable: the
+        * whole feature needs tmux to detect a teammate at all, so it cannot
+        * cover a missing binary, and against a dead server a capture returns
+        * nothing while an attach at least says "no sessions". It was a
+        * subprocess every 1.2s and a second code path, for strictly less.
+        */}
+      <div style={S.term}>
+        {windowId ? (
+          <TerminalPane
+            /*
+             * Keyed by window, and attached to the window rather than the
+             * pane: a pane target only sets which pane is active, leaving the
+             * client rendering all five tiled. The id includes the window so
+             * the PTY is reused across remounts -- reopening the tab returns
+             * to the same attachment instead of starting a second.
+             */
+            paneId={`mate:${props.socket}:${windowId}`}
+            cmd="tmux"
+            args={["-L", props.socket, "attach", "-t", windowId]}
+            cwd={props.mate.cwd}
+            focused
+          />
+        ) : (
+          <div style={S.termWait}>attaching to {props.mate.name}…</div>
+        )}
       </div>
     </div>
   );
@@ -203,9 +214,16 @@ const S: Record<string, React.CSSProperties> = {
     marginLeft: "auto", background: "transparent", border: "none",
     color: C.faint, cursor: "pointer", fontSize: 11,
   },
+  term: { flex: 1, minHeight: 0, overflow: "hidden" },
+  termWait: { padding: 12, color: C.faint, fontSize: 11 },
   view: {
     display: "flex", flexDirection: "column", flexShrink: 0,
-    height: 260, margin: "0 10px 8px", borderRadius: 8,
+    /*
+     * Taller than the snapshot needed. An attached terminal resizes the tmux
+     * pane to fit this box, and Claude's interface reflows to whatever it is
+     * given -- at 260px it had about eight usable rows.
+     */
+    height: 420, margin: "0 10px 8px", borderRadius: 8,
     border: "1px solid", background: "#0d0d11", overflow: "hidden",
   },
   viewHead: {
@@ -217,19 +235,5 @@ const S: Record<string, React.CSSProperties> = {
   act: {
     background: "transparent", border: `1px solid ${C.line}`, color: C.dim,
     borderRadius: 4, padding: "1px 8px", cursor: "pointer", fontSize: 10,
-  },
-  body: {
-    // minHeight:0 or a long transcript grows the box instead of scrolling it.
-    flex: 1, minHeight: 0, margin: 0, padding: "7px 9px", overflowY: "auto",
-    fontFamily: 'Menlo, "SF Mono", monospace', fontSize: 11, lineHeight: "15px",
-    color: C.dim, whiteSpace: "pre-wrap", wordBreak: "break-word",
-  },
-  inputRow: {
-    display: "flex", alignItems: "center", gap: 7, padding: "5px 9px",
-    borderTop: `1px solid ${C.line}`, flexShrink: 0,
-  },
-  input: {
-    flex: 1, background: "transparent", border: "none", outline: "none",
-    color: C.fg, fontFamily: 'Menlo, "SF Mono", monospace', fontSize: 11,
   },
 };

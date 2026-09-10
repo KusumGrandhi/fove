@@ -156,10 +156,29 @@ export class TeamService {
     return teams.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
   }
 
-  /** Recent output from a teammate's pane, for the live view. */
+  /**
+   * Recent output from a teammate's pane, for the live view.
+   *
+   * `-J` joins the lines tmux wrapped to its own pane width. Without it a
+   * paragraph comes back hard-broken at whatever column the tmux pane happens
+   * to be, which has nothing to do with the width fove is rendering into --
+   * so the text looked arbitrarily chopped.
+   *
+   * No `-e`: the escapes would keep colour, but the view renders into a plain
+   * `<pre>`, so they would arrive as literal `[38;5;…m` garbage. Colour is
+   * worth having only once something parses it.
+   *
+   * The `-S -N` window is a request, not a guarantee: tmux clamps it to the
+   * pane's `history-limit`, and this server belongs to Claude Code rather than
+   * to us, so a pane can hold less than we ask for. That is why a fresh
+   * teammate's view can look near-empty and unscrollable -- there genuinely is
+   * nothing behind it yet.
+   */
   async capture(socket: string, paneId: string, lines = 200): Promise<string> {
     try {
-      return await tmux(socket, ["capture-pane", "-p", "-t", paneId, "-S", `-${lines}`]);
+      return await tmux(socket, [
+        "capture-pane", "-p", "-J", "-t", paneId, "-S", `-${lines}`,
+      ]);
     } catch {
       return "";
     }
@@ -180,6 +199,64 @@ export class TeamService {
   async interrupt(socket: string, paneId: string): Promise<boolean> {
     try {
       await tmux(socket, ["send-keys", "-t", paneId, "Escape"]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Give a teammate's pane a window of its own, and say which one.
+   *
+   * Claude Code puts every teammate in one tiled window, so attaching shows
+   * all five at once: `attach -t <pane>` only chooses which pane is *active*,
+   * and the client still renders the whole window. Zoom does isolate one
+   * visually but is window state shared by every client, so it would reach
+   * into Claude Code's own swarm-view -- verified, not assumed.
+   *
+   * `break-pane` is the mechanism that actually separates them. `-d` leaves
+   * focus where it was, so opening a tab does not yank the external view to a
+   * different window.
+   *
+   * Idempotent: a pane already alone in its window is returned as-is rather
+   * than broken again, so reopening a tab is free.
+   */
+  async isolate(
+    socket: string,
+    paneId: string,
+  ): Promise<{ window: string; origin: string | null } | null> {
+    try {
+      const where = (await tmux(socket, [
+        "display-message", "-p", "-t", paneId,
+        "#{window_id} #{window_panes}",
+      ])).trim();
+      const [windowId, panes] = where.split(/\s+/);
+      if (!windowId) return null;
+      // Already alone: nothing to break, and nothing to put back later.
+      if (Number(panes) <= 1) return { window: windowId, origin: null };
+
+      await tmux(socket, ["break-pane", "-d", "-s", paneId]);
+      const moved = (await tmux(socket, [
+        "display-message", "-p", "-t", paneId, "#{window_id}",
+      ])).trim();
+      if (!moved) return null;
+      return { window: moved, origin: windowId };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Put a pane back in the shared window.
+   *
+   * Called when a teammate tab closes, so the tiled swarm-view Claude Code
+   * built is left as it was found. Best-effort: if the original window is
+   * gone -- the swarm finished, someone closed it -- the pane simply stays
+   * where it is rather than failing the close.
+   */
+  async rejoin(socket: string, paneId: string, targetWindowId: string): Promise<boolean> {
+    try {
+      await tmux(socket, ["join-pane", "-d", "-s", paneId, "-t", targetWindowId]);
       return true;
     } catch {
       return false;

@@ -119,6 +119,8 @@ const CH = {
   teamCapture: "teams:capture",
   teamSend: "teams:send",
   teamInterrupt: "teams:interrupt",
+  teamIsolate: "teams:isolate",
+  teamRejoin: "teams:rejoin",
   bgSessions: "sessions:background",
   providers: "models:providers",
   agentsList: "config:agents",
@@ -404,6 +406,20 @@ const api = {
     ipcRenderer.invoke(CH.teamSend, socket, paneId, text),
   teamInterrupt: (socket: string, paneId: string): Promise<boolean> =>
     ipcRenderer.invoke(CH.teamInterrupt, socket, paneId),
+  /**
+   * Give a teammate's pane its own window.
+   *
+   * Resolves to the window to attach to, plus the window it came from so the
+   * caller can put it back. `origin` is null when the pane was already alone.
+   */
+  teamIsolate: (
+    socket: string,
+    paneId: string,
+  ): Promise<{ window: string; origin: string | null } | null> =>
+    ipcRenderer.invoke(CH.teamIsolate, socket, paneId),
+  /** Put the pane back in the shared window it came from. */
+  teamRejoin: (socket: string, paneId: string, windowId: string): Promise<boolean> =>
+    ipcRenderer.invoke(CH.teamRejoin, socket, paneId, windowId),
 
   appCwd: (): Promise<string> => ipcRenderer.invoke(CH.appCwd),
 
