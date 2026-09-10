@@ -102,6 +102,7 @@ export const CH = {
   dbgStatus: "dbg:status",
   dbgOutput: "dbg:output",
   wtList: "wt:list",
+  wtRemove: "wt:remove",
   wsCreate: "ws:create-worktree",
   wsApply: "ws:apply-recipe",
   popoutOpen: "popout:open",

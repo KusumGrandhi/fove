@@ -277,6 +277,23 @@ export class GitWriteService {
     }
   }
 
+  // ---- worktrees ----------------------------------------------------------
+
+  /**
+   * Detach a worktree and delete its directory.
+   *
+   * Without `force` git refuses a worktree with uncommitted or untracked
+   * files, which is the guard worth keeping: the directory is deleted, so
+   * anything not committed is gone. Callers own the higher-level refusals
+   * (main worktree, live sessions) -- git has no opinion on those.
+   */
+  worktreeRemove(cwd: string, path: string, force = false): Promise<GitWriteResult> {
+    const args = ["worktree", "remove"];
+    if (force) args.push("--force");
+    args.push(path);
+    return gitWrite(cwd, args);
+  }
+
   // ---- stash --------------------------------------------------------------
 
   /**

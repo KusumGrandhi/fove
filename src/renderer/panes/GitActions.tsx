@@ -52,6 +52,17 @@ const LANES = ["#5a7fb8", "#5c9668", "#a8894a", "#8a6ba3", "#a86469", "#4d9199"]
 /** The lane carrying HEAD. The only colour in the graph that means something. */
 const HEAD_LANE = "#2f6feb";
 
+/** One row of `wtList` — the fields the worktree tab shows or guards on. */
+interface WorktreeRow {
+  path: string;
+  name: string;
+  branch?: string;
+  current?: boolean;
+  locked?: boolean;
+  dirty?: number;
+  agents: number;
+}
+
 export function GitActions(props: {
   root: string;
   /** Paths git reports as changed, for the staging buttons. */
@@ -66,6 +77,7 @@ export function GitActions(props: {
   const [tab, setTab] = useState<"changes" | "graph" | "stash" | "worktree">("changes");
   const [wtName, setWtName] = useState("");
   const [wtSteps, setWtSteps] = useState<{ step: string; ok: boolean; detail?: string }[] | null>(null);
+  const [wtrees, setWtrees] = useState<WorktreeRow[]>([]);
   const [recipe, setRecipe] = useState<{ link?: string[]; run?: string[] } | null>(null);
   const [message, setMessage] = useState("");
   const [amend, setAmend] = useState(false);
@@ -112,6 +124,10 @@ export function GitActions(props: {
     setStashes((await window.th.gitStashList(root)) as StashEntry[]);
   }, [root]);
 
+  const loadWorktrees = useCallback(async () => {
+    setWtrees((await window.th.wtList(root)) as WorktreeRow[]);
+  }, [root]);
+
   useEffect(() => {
     // A commit expanded in one scope may not exist in the other.
     setOpenCommit(null);
@@ -127,8 +143,9 @@ export function GitActions(props: {
         };
         setRecipe(r?.recipe ?? null);
       })();
+      void loadWorktrees();
     }
-  }, [tab, root, loadGraph, loadStashes]);
+  }, [tab, root, loadGraph, loadStashes, loadWorktrees]);
 
   /**
    * Create a worktree beside the repository and apply its recipe.
@@ -148,11 +165,47 @@ export function GitActions(props: {
       })) as { ok: boolean; path: string; steps: { step: string; ok: boolean; detail?: string }[] };
       setWtSteps(r.steps);
       if (r.ok) setWtName("");
+      await loadWorktrees();
       onChanged();
     } finally {
       setBusy(false);
     }
-  }, [root, wtName, onChanged]);
+  }, [root, wtName, onChanged, loadWorktrees]);
+
+  /**
+   * Close a worktree: detach it from the repo and delete its directory.
+   *
+   * The main process owns the refusals (main worktree, current worktree,
+   * locked, live agents) so they cannot be bypassed by a stale render -- this
+   * only has to name the cost before asking, and offer the one override git
+   * allows. Uncommitted work is the override, and it is a separate, blunter
+   * prompt: the first confirm is "delete a directory", the second is "throw
+   * away work", and those deserve different answers.
+   */
+  const closeWorktree = useCallback(async (w: WorktreeRow) => {
+    if (!confirm(`Close ${w.name}? The directory at ${w.path} is deleted. The branch is kept.`)) return;
+    setBusy(true);
+    try {
+      let r = await window.th.wtRemove(root, w.path);
+      // Gated on the main process's own verdict, not on `w.dirty`: the row can
+      // be a render behind, and a tree that is merely dirty-looking may have
+      // been refused for a lock or a live agent instead. Asking "lose your
+      // work?" about one of those seeks consent for the wrong loss.
+      if (!r.ok && r.retryWithForce) {
+        if (confirm(`${w.name} has ${w.dirty ?? 0} uncommitted file(s). Close anyway and lose them?`)) {
+          r = await window.th.wtRemove(root, w.path, true);
+        } else {
+          return;
+        }
+      }
+      if (r.ok) setNotice(`closed ${w.name}`);
+      else setError(r.error ?? "could not close worktree");
+      await loadWorktrees();
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  }, [root, onChanged, loadWorktrees]);
 
   const commit = async () => {
     if (!message.trim()) { setError("a commit needs a message"); return; }
@@ -332,6 +385,49 @@ export function GitActions(props: {
               create
             </button>
           </div>
+
+          {wtrees.length > 0 && (
+            <div style={S.wtList}>
+              {wtrees.map((w, i) => {
+                // The main worktree is first in git's own listing. Neither it
+                // nor the current one can be closed, and saying why beats
+                // showing a button that always fails.
+                const isMain = i === 0;
+                const why = isMain ? "the main worktree"
+                  : w.current ? "the worktree you are in"
+                  : w.locked ? "locked"
+                  : w.agents > 0 ? `${w.agents} live session${w.agents === 1 ? "" : "s"}`
+                  : null;
+                return (
+                  <div key={w.path} style={S.wtRow}>
+                    <span style={{ color: C.fg }}>{w.name}</span>
+                    <span style={{ color: C.faint }}>{w.branch ?? "detached"}</span>
+                    {w.dirty !== undefined && w.dirty > 0 && (
+                      <span style={{ color: "#d29922" }}>{w.dirty} dirty</span>
+                    )}
+                    {w.agents > 0 && (
+                      <span style={{ color: "#3fb950" }}>
+                        {w.agents} agent{w.agents === 1 ? "" : "s"}
+                      </span>
+                    )}
+                    <div style={{ flex: 1 }} />
+                    {why ? (
+                      <span style={{ color: C.faint, fontSize: 10 }}>{why}</span>
+                    ) : (
+                      <button
+                        style={S.danger}
+                        disabled={busy}
+                        title={`Remove ${w.path} — the branch is kept`}
+                        onClick={() => void closeWorktree(w)}
+                      >
+                        close
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {recipe && (() => {
             // Config and dependencies are linked for different reasons -- one
@@ -761,5 +857,12 @@ const S: Record<string, React.CSSProperties> = {
   step: { display: "flex", gap: 6, fontSize: 11, alignItems: "baseline" },
   stashRow: {
     display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", fontSize: 11,
+  },
+  wtList: {
+    display: "flex", flexDirection: "column", marginTop: 4,
+    borderRadius: 5, background: "#12121a", border: "1px solid #23232c",
+  },
+  wtRow: {
+    display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", fontSize: 11,
   },
 };

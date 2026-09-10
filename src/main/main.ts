@@ -173,7 +173,10 @@ ipcMain.on(CH.ptyResize, (_e, paneId: string, cols: number, rows: number) =>
 ipcMain.on(CH.ptyKill, (_e, paneId: string) => ptys.kill(paneId));
 
 const gitSvc = new GitService();
-const worktreeSvc = new WorktreeService(gitSvc);
+// Stateless, and needed here as well as by the git-write handlers below:
+// closing a worktree is a mutating command that the worktree service guards.
+const gitw = new GitWriteService();
+const worktreeSvc = new WorktreeService(gitSvc, gitw);
 const fileSvc = new FileService();
 const claudeSvc = new ClaudeSessionService();
 const teamSvc = new TeamService();
@@ -182,6 +185,9 @@ ipcMain.handle(CH.gitRoot, (_e, cwd: string) => gitSvc.root(cwd));
 ipcMain.handle(CH.gitStatus, (_e, cwd: string) => gitSvc.status(cwd));
 ipcMain.handle(CH.gitWorktrees, (_e, cwd: string) => gitSvc.worktrees(cwd));
 ipcMain.handle(CH.wtList, (_e, cwd: string) => worktreeSvc.list(cwd));
+ipcMain.handle(CH.wtRemove, (_e, cwd: string, path: string, force?: boolean) =>
+  worktreeSvc.remove(cwd, path, { force }),
+);
 ipcMain.handle(CH.gitDiff, (_e, cwd: string, opts: Record<string, unknown>) =>
   gitSvc.diff(cwd, opts as never),
 );
@@ -239,8 +245,8 @@ ipcMain.handle(CH.memoryList, () => listMemories());
 // ---- git write ------------------------------------------------------------
 // Mutating commands. Each returns git's own stderr on failure so the UI can
 // show the real reason -- a rejected push or a failing hook -- rather than a
-// summary of it.
-const gitw = new GitWriteService();
+// summary of it. `gitw` is constructed with the other services above, because
+// the worktree service needs it too.
 
 ipcMain.handle(CH.gitStage, (_e, cwd: string, paths: string[]) => gitw.stage(cwd, paths));
 ipcMain.handle(CH.gitUnstage, (_e, cwd: string, paths: string[]) => gitw.unstage(cwd, paths));

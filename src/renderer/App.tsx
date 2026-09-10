@@ -955,6 +955,39 @@ export function App() {
         <ToolButton label="Browser" hint="⌘B" icon="◍" onClick={() => doSplit("row", "browser")} />
         <ToolButton label="Debug" icon="◆" onClick={() => doSplit("row", "debug")} />
         <ToolButton label="Config" hint="⌘K" icon="⚙" onClick={() => doSplit("row", "config")} />
+        {/*
+          * Switching worktree, in one visible control.
+          *
+          * This existed, and was removed when the command palette learned to
+          * list worktrees -- on the reasoning that the palette covered it. It
+          * does not: a palette entry is something you must already know is
+          * there, and the whole point of a worktree bar is seeing at a glance
+          * that the other checkouts exist.
+          */}
+        {worktrees.length > 1 && active && (
+          <>
+            <Divider />
+            <select
+              value=""
+              onChange={(e) => {
+                const w = worktrees.find((x) => x.path === e.target.value);
+                if (w) void addTab(w.path, w.branch);
+                e.target.value = "";
+              }}
+              style={S.wtSelect}
+              title="Open another worktree as a workspace"
+            >
+              <option value="">⎇ worktree…</option>
+              {worktrees
+                .filter((w) => w.path !== active.cwd)
+                .map((w) => (
+                  <option key={w.path} value={w.path}>
+                    {w.branch ?? w.path.split("/").pop()}
+                  </option>
+                ))}
+            </select>
+          </>
+        )}
         <ToolButton
           label={THEMES.find((t) => t.id === themeId)?.label ?? "Theme"}
           icon="◐"

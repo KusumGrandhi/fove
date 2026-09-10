@@ -97,6 +97,7 @@ const CH = {
   dbgStatus: "dbg:status",
   dbgOutput: "dbg:output",
   wtList: "wt:list",
+  wtRemove: "wt:remove",
   wsCreate: "ws:create-worktree",
   wsApply: "ws:apply-recipe",
   popoutOpen: "popout:open",
@@ -247,6 +248,16 @@ const api = {
     return () => { ipcRenderer.off(CH.dbgOutput, h); };
   },
   wtList: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.wtList, cwd),
+  /**
+   * Close a worktree. Refusals come back as { ok: false, error } — not a throw.
+   * `retryWithForce` marks the only refusal a retry can get past.
+   */
+  wtRemove: (
+    cwd: string,
+    path: string,
+    force?: boolean,
+  ): Promise<{ ok: boolean; error?: string; retryWithForce?: boolean }> =>
+    ipcRenderer.invoke(CH.wtRemove, cwd, path, force),
   wsCreate: (opts: unknown): Promise<unknown> => ipcRenderer.invoke(CH.wsCreate, opts),
   wsApply: (worktree: string, primary: string): Promise<unknown> =>
     ipcRenderer.invoke(CH.wsApply, worktree, primary),
