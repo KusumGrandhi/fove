@@ -59,10 +59,21 @@ const STATE_COLOR: Record<BgSession["state"], string> = {
 
 export function AgentsPane(props: {
   cwd: string;
+  /**
+   * The claude pane whose session this pane reports on.
+   *
+   * Required for correctness, not a refinement: without it the snapshot
+   * resolves to whichever transcript in the folder was modified last, so with
+   * more than one session in a folder -- two workspaces, or an editor running
+   * its own claude -- this pane reports on somebody else's run. That is what
+   * made it show "no subagents in this session" while five readers were
+   * visibly working, then jump to five once ours became the newest file.
+   */
+  claudePaneId?: string;
   /** Open a file in fove's own editor pane. */
   onOpen?: (path: string, line?: number) => void;
 }) {
-  const snap = useSnapshot(props.cwd, 2000);
+  const snap = useSnapshot(props.cwd, 2000, props.claudePaneId);
   const bg = useBackgroundSessions(props.cwd);
   const [view, setView] = useState<View>("tree");
   const [selected, setSelected] = useState<string | null>(null);

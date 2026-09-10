@@ -68,10 +68,40 @@ export function useSnapshot(
       return;
     }
     let alive = true;
+    /*
+     * One read at a time, and results applied in order.
+     *
+     * Parsing a long transcript can outlast the interval, so without the
+     * in-flight guard the polls overlap and a slower older response can land
+     * after a newer one -- the pane then shows counts that go backwards. The
+     * sequence number makes a late reply detectable rather than trusted.
+     */
+    let inFlight = false;
+    let issued = 0;
+    let applied = 0;
     const tick = async () => {
-      const s = (await window.th.claudeSnapshot(cwd, paneId)) as Snapshot | null;
-      if (alive) setSnap(s);
+      if (inFlight) return;
+      inFlight = true;
+      const seq = ++issued;
+      try {
+        const s = (await window.th.claudeSnapshot(cwd, paneId)) as Snapshot | null;
+        if (!alive || seq < applied) return;
+        applied = seq;
+        /*
+         * Hold the last good snapshot rather than blanking on a miss.
+         *
+         * A single read can come back null while a session is very much alive
+         * -- the transcript is mid-write, or the pty has not registered yet --
+         * and dropping to null there empties the pane for 2 seconds. Only an
+         * explicit change of target (below) clears it.
+         */
+        if (s) setSnap(s);
+      } finally {
+        inFlight = false;
+      }
     };
+    // A new target must not keep showing the previous one's numbers.
+    setSnap(null);
     void tick();
     const t = setInterval(tick, intervalMs);
     return () => { alive = false; clearInterval(t); };

@@ -1284,7 +1284,19 @@ export function App() {
                         onActivePathChange={(p) => noteEditorPath(spec.id, p)}
                       />
                     ) : spec.kind === "agents" ? (
-                      <AgentsPane cwd={spec.cwd ?? cwdOf(active)} onOpen={openInPane} />
+                      <AgentsPane
+                        cwd={spec.cwd ?? cwdOf(active)}
+                        /*
+                         * The claude pane whose session to read.
+                         *
+                         * Without it the snapshot falls back to whichever
+                         * transcript in the folder was touched last, which is
+                         * how this pane showed "no subagents" while five were
+                         * running -- the same bug the stats rail already had.
+                         */
+                        claudePaneId={railPaneId}
+                        onOpen={openInPane}
+                      />
                     ) : spec.kind === "config" ? (
                       <ConfigPane cwd={spec.cwd ?? cwdOf(active)} onOpen={openInPane} />
                     ) : spec.kind === "search" ? (
