@@ -63,7 +63,15 @@ interface WorktreeRow {
   agents: number;
 }
 
-export function GitActions(props: {
+/**
+ * The commit form and the panel strip, as two elements the caller places.
+ *
+ * A hook rather than a component because these two pieces belong on opposite
+ * sides of the parent's file list -- commit above, graph/stash/worktree below
+ * -- while sharing one `tab` state and the loaders keyed off it. Returning
+ * both from one call keeps that state here instead of hoisting it.
+ */
+export function useGitActions(props: {
   root: string;
   /** Paths git reports as changed, for the staging buttons. */
   staged: string[];
@@ -74,7 +82,14 @@ export function GitActions(props: {
   onOpen?: (path: string, line?: number) => void;
 }) {
   const { root, onChanged } = props;
-  const [tab, setTab] = useState<"changes" | "graph" | "stash" | "worktree">("changes");
+  /**
+   * Which lower panel is open, or null for none.
+   *
+   * "changes" left this union when committing stopped being a tab: it is the
+   * permanent top of the pane now, so the only question is which occasional
+   * view is open underneath -- and "none" is the common answer.
+   */
+  const [tab, setTab] = useState<"graph" | "stash" | "worktree" | null>(null);
   const [wtName, setWtName] = useState("");
   const [wtSteps, setWtSteps] = useState<{ step: string; ok: boolean; detail?: string }[] | null>(null);
   const [wtrees, setWtrees] = useState<WorktreeRow[]>([]);
@@ -241,85 +256,39 @@ export function GitActions(props: {
     return -1;
   })();
 
-  return (
-    <div style={S.wrap}>
+  /** The strip and whichever panel it has open, for the parent to place. */
+  const panels = (
+    <>
+      {/*
+        * Committing is not a tab, and the strip is not on top.
+        *
+        * Committing is what this pane is for, so it is always the top of the
+        * pane rather than one of four peers -- reaching the graph used to hide
+        * the commit form behind a tab. The three occasional views moved below
+        * the file list instead, which is the order you actually read in:
+        * commit what you staged, see what changed, then consult history.
+        *
+        * Rendered through `renderPanels` because the file list lives in the
+        * parent: this component keeps `tab` and the loaders keyed off it, and
+        * hands the parent the lower half to place. Clicking the active tab
+        * closes it -- the way out is the same button as the way in.
+        */}
       <div style={S.tabs}>
-        <button style={tabStyle(tab === "changes")} onClick={() => setTab("changes")}>changes</button>
-        <button style={tabStyle(tab === "graph")} onClick={() => setTab("graph")}>graph</button>
-        <button style={tabStyle(tab === "stash")} onClick={() => setTab("stash")}>
+        <button style={tabStyle(tab === "graph")}
+          onClick={() => setTab(tab === "graph" ? null : "graph")}>graph</button>
+        <button style={tabStyle(tab === "stash")}
+          onClick={() => setTab(tab === "stash" ? null : "stash")}>
           stash{stashes.length > 0 ? ` ${stashes.length}` : ""}
         </button>
-        <button style={tabStyle(tab === "worktree")} onClick={() => setTab("worktree")}>
+        <button style={tabStyle(tab === "worktree")}
+          onClick={() => setTab(tab === "worktree" ? null : "worktree")}>
           worktree
         </button>
         <div style={{ flex: 1 }} />
-        <button style={S.ghost} disabled={busy}
-          onClick={() => void act(() => window.th.gitFetch(root), "fetched")}>fetch</button>
-        <button style={S.ghost} disabled={busy}
-          onClick={() => void act(() => window.th.gitPull(root, { rebase: true }), "pulled")}>pull</button>
-        <button style={S.primary} disabled={busy}
-          onClick={() => void act(() => window.th.gitPush(root, {}), "pushed")}>push</button>
+        {tab && (
+          <button style={S.ghost} title="Close this panel" onClick={() => setTab(null)}>✕</button>
+        )}
       </div>
-
-      {error && (
-        // git's own words, unmodified and scrollable -- hook output can be long.
-        <pre style={S.error}>{error}</pre>
-      )}
-      {notice && <div style={S.notice}>{notice}</div>}
-
-      {tab === "changes" && (
-        <div style={S.body}>
-          <div style={S.rowBar}>
-            <button style={S.ghost} disabled={busy || props.unstaged.length === 0}
-              onClick={() => void act(() => window.th.gitStage(root, props.unstaged))}>
-              stage all ({props.unstaged.length})
-            </button>
-            <button style={S.ghost} disabled={busy || props.staged.length === 0}
-              onClick={() => void act(() => window.th.gitUnstage(root, props.staged))}>
-              unstage all ({props.staged.length})
-            </button>
-            <button style={S.danger} disabled={busy || props.unstaged.length === 0}
-              onClick={() => {
-                // Discarding cannot be undone by git, so name the cost first.
-                if (!confirm(`Discard changes to ${props.unstaged.length} file(s)? This cannot be undone.`)) return;
-                void act(() => window.th.gitDiscard(root, props.unstaged), "discarded");
-              }}>
-              discard
-            </button>
-          </div>
-
-          <textarea
-            style={S.message}
-            placeholder={amend ? "amend the last commit…" : "commit message"}
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            // The pane's own shortcuts must not fire while typing a message.
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void commit();
-            }}
-          />
-          <div style={S.rowBar}>
-            <label style={S.check}>
-              <input type="checkbox" checked={amend} onChange={(e) => setAmend(e.target.checked)} />
-              amend
-            </label>
-            <div style={{ flex: 1 }} />
-            <span style={S.hint}>⌘↵</span>
-            <button style={S.primary} disabled={busy} onClick={() => void commit()}>
-              {amend ? "amend" : "commit"} {props.staged.length > 0 ? `(${props.staged.length})` : ""}
-            </button>
-          </div>
-
-          <div style={S.rowBar}>
-            <button style={S.ghost} disabled={busy}
-              onClick={() => void act(() => window.th.gitStashPush(root, message || undefined, true), "stashed")}>
-              stash all (incl. untracked)
-            </button>
-          </div>
-        </div>
-      )}
-
       {tab === "graph" && (
         <>
         <div style={S.scopeBar}>
@@ -399,30 +368,48 @@ export function GitActions(props: {
                   : w.agents > 0 ? `${w.agents} live session${w.agents === 1 ? "" : "s"}`
                   : null;
                 return (
+                  /*
+                   * Two lines, not five columns. Name, branch, dirty, agents
+                   * and the reason a tree cannot be closed were five inline
+                   * spans in one non-wrapping row, so in a slim pane every
+                   * one of them broke mid-word -- "the main worktree" became
+                   * a column of syllables. Identity first, then the numbers
+                   * and the action, each wrapping as a unit.
+                   */
                   <div key={w.path} style={S.wtRow}>
-                    <span style={{ color: C.fg }}>{w.name}</span>
-                    <span style={{ color: C.faint }}>{w.branch ?? "detached"}</span>
-                    {w.dirty !== undefined && w.dirty > 0 && (
-                      <span style={{ color: "#d29922" }}>{w.dirty} dirty</span>
-                    )}
-                    {w.agents > 0 && (
-                      <span style={{ color: "#3fb950" }}>
-                        {w.agents} agent{w.agents === 1 ? "" : "s"}
+                    <div style={S.wtIdentity}>
+                      <span style={{ ...S.wtName, color: w.current ? C.fg : C.dim }}>
+                        {w.current ? "● " : ""}{w.name}
                       </span>
-                    )}
-                    <div style={{ flex: 1 }} />
-                    {why ? (
-                      <span style={{ color: C.faint, fontSize: 10 }}>{why}</span>
-                    ) : (
-                      <button
-                        style={S.danger}
-                        disabled={busy}
-                        title={`Remove ${w.path} — the branch is kept`}
-                        onClick={() => void closeWorktree(w)}
-                      >
-                        close
-                      </button>
-                    )}
+                      <span style={S.wtBranch} title={w.branch ?? "detached"}>
+                        {w.branch ?? "detached"}
+                      </span>
+                    </div>
+                    <div style={S.wtMeta}>
+                      {w.dirty !== undefined && w.dirty > 0 && (
+                        <span style={{ color: "#d29922" }}>{w.dirty} dirty</span>
+                      )}
+                      {w.agents > 0 && (
+                        <span style={{ color: "#3fb950" }}>
+                          {w.agents} agent{w.agents === 1 ? "" : "s"}
+                        </span>
+                      )}
+                      <div style={{ flex: 1 }} />
+                      {why ? (
+                        <span style={{ color: C.faint, fontSize: 10, whiteSpace: "nowrap" }}>
+                          {why}
+                        </span>
+                      ) : (
+                        <button
+                          style={S.danger}
+                          disabled={busy}
+                          title={`Remove ${w.path} — the branch is kept`}
+                          onClick={() => void closeWorktree(w)}
+                        >
+                          close
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -483,8 +470,19 @@ export function GitActions(props: {
           ) : (
             stashes.map((s) => (
               <div key={s.ref} style={S.stashRow}>
-                <span style={{ color: C.faint, minWidth: 68 }}>{s.ref}</span>
-                <span style={{ flex: 1, color: C.fg, overflow: "hidden", textOverflow: "ellipsis" }}>
+                {/*
+                  * `nowrap` is what was missing: ellipsis without it does
+                  * nothing, so a slim pane broke a stash message to one
+                  * character per line and pushed the buttons far apart.
+                  */}
+                <span style={{ color: C.faint, flexShrink: 0 }}>{s.ref}</span>
+                <span
+                  style={{
+                    flex: 1, minWidth: 0, color: C.fg,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  }}
+                  title={s.message}
+                >
                   {s.message}
                 </span>
                 <button style={S.ghost} disabled={busy}
@@ -513,8 +511,80 @@ export function GitActions(props: {
           )}
         </div>
       )}
-    </div>
+    </>
   );
+
+  const form = (
+      <div style={S.wrap}>
+        {/* Remote actions on their own row, so a slim pane wraps instead of
+            scrolling the strip they used to share. */}
+        <div style={S.remoteBar}>
+          <button style={S.ghost} disabled={busy}
+            onClick={() => void act(() => window.th.gitFetch(root), "fetched")}>fetch</button>
+          <button style={S.ghost} disabled={busy}
+            onClick={() => void act(() => window.th.gitPull(root, { rebase: true }), "pulled")}>pull</button>
+          <div style={{ flex: 1 }} />
+          <button style={S.primary} disabled={busy}
+            onClick={() => void act(() => window.th.gitPush(root, {}), "pushed")}>push</button>
+        </div>
+
+        {/* git's own words, unmodified and scrollable -- hook output can be long. */}
+        {error && <pre style={S.error}>{error}</pre>}
+        {notice && <div style={S.notice}>{notice}</div>}
+        <div style={S.body}>
+          <div style={S.rowBar}>
+            <button style={S.ghost} disabled={busy || props.unstaged.length === 0}
+              onClick={() => void act(() => window.th.gitStage(root, props.unstaged))}>
+              stage {props.unstaged.length}
+            </button>
+            <button style={S.ghost} disabled={busy || props.staged.length === 0}
+              onClick={() => void act(() => window.th.gitUnstage(root, props.staged))}>
+              unstage {props.staged.length}
+            </button>
+            <button style={S.danger} disabled={busy || props.unstaged.length === 0}
+              onClick={() => {
+                // Discarding cannot be undone by git, so name the cost first.
+                if (!confirm(`Discard changes to ${props.unstaged.length} file(s)? This cannot be undone.`)) return;
+                void act(() => window.th.gitDiscard(root, props.unstaged), "discarded");
+              }}>
+              discard
+            </button>
+          </div>
+
+          <textarea
+            style={S.message}
+            placeholder={amend ? "amend the last commit…" : "commit message"}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            // The pane's own shortcuts must not fire while typing a message.
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void commit();
+            }}
+          />
+          <div style={S.rowBar}>
+            <label style={S.check}>
+              <input type="checkbox" checked={amend} onChange={(e) => setAmend(e.target.checked)} />
+              amend
+            </label>
+            <div style={{ flex: 1 }} />
+            <span style={S.hint}>⌘↵</span>
+            <button style={S.primary} disabled={busy} onClick={() => void commit()}>
+              {amend ? "amend" : "commit"} {props.staged.length > 0 ? `(${props.staged.length})` : ""}
+            </button>
+          </div>
+
+          <div style={S.rowBar}>
+            <button style={S.ghost} disabled={busy}
+              onClick={() => void act(() => window.th.gitStashPush(root, message || undefined, true), "stashed")}>
+              stash changes
+            </button>
+          </div>
+        </div>
+      </div>
+  );
+
+  return { form, panels };
 }
 
 /**
@@ -755,9 +825,17 @@ const S: Record<string, React.CSSProperties> = {
      */
     overflowY: "auto", maxHeight: "50%", flexShrink: 0,
   },
-  tabs: { display: "flex", alignItems: "center", gap: 4, padding: "5px 8px", background: "#12121a" },
+  /* Everything wraps: one non-wrapping row scrolled the selected tab off-screen. */
+  tabs: {
+    display: "flex", alignItems: "center", flexWrap: "wrap", gap: 4,
+    padding: "5px 8px", background: "#12121a", borderTop: "1px solid #1c1c26",
+  },
+  remoteBar: {
+    display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6,
+    padding: "5px 8px", background: "#12121a", borderBottom: "1px solid #1c1c26",
+  },
   body: { display: "flex", flexDirection: "column", gap: 6, padding: "6px 8px" },
-  rowBar: { display: "flex", alignItems: "center", gap: 6 },
+  rowBar: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 },
   message: {
     background: "#0d0d11", color: C.fg, border: "1px solid #2a2a34", borderRadius: 5,
     padding: "6px 8px", fontFamily: "system-ui", fontSize: 12, resize: "vertical",
@@ -856,13 +934,23 @@ const S: Record<string, React.CSSProperties> = {
   steps: { display: "flex", flexDirection: "column", gap: 3, marginTop: 4 },
   step: { display: "flex", gap: 6, fontSize: 11, alignItems: "baseline" },
   stashRow: {
-    display: "flex", alignItems: "center", gap: 6, padding: "3px 8px", fontSize: 11,
+    display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6,
+    padding: "3px 8px", fontSize: 11, borderBottom: "1px solid #16161e",
   },
   wtList: {
     display: "flex", flexDirection: "column", marginTop: 4,
     borderRadius: 5, background: "#12121a", border: "1px solid #23232c",
   },
   wtRow: {
-    display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", fontSize: 11,
+    display: "flex", flexDirection: "column", gap: 2,
+    padding: "5px 8px", fontSize: 11, borderBottom: "1px solid #16161e",
   },
+  wtIdentity: { display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 },
+  /* The name is the identity, so it survives; the branch yields first. */
+  wtName: { flexShrink: 0, whiteSpace: "nowrap" },
+  wtBranch: {
+    color: C.faint, flex: 1, minWidth: 0,
+    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+  },
+  wtMeta: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 },
 };

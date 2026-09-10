@@ -8,10 +8,10 @@
  * editor exists.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import type { FileChange, FileDiff, RepoStatus, Worktree } from "../../shared/git-parse.js";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { FileChange, FileDiff, RepoStatus } from "../../shared/git-parse.js";
 import { statusLabel } from "../../shared/git-parse.js";
-import { GitActions } from "./GitActions.js";
+import { useGitActions } from "./GitActions.js";
 
 const C = {
   bg: "#0d0d11", panel: "#14141a", line: "#22222a",
@@ -28,6 +28,13 @@ const statusColor = (f: FileChange): string => {
     : C.dim;
 };
 
+/**
+ * Below this width the file list and the diff stack instead of sitting side
+ * by side. 520px is roughly where a 240px list stops leaving the diff enough
+ * room to be worth reading.
+ */
+const STACK_BELOW_PX = 520;
+
 export function GitStatusPane(props: {
   cwd: string;
   /** Open a file in fove's own editor pane. */
@@ -35,25 +42,58 @@ export function GitStatusPane(props: {
 }) {
   const [root, setRoot] = useState<string | null>(null);
   const [status, setStatus] = useState<RepoStatus | null>(null);
-  const [worktrees, setWorktrees] = useState<Worktree[]>([]);
   const [selected, setSelected] = useState<FileChange | null>(null);
   const [diff, setDiff] = useState<FileDiff | null>(null);
   const [busy, setBusy] = useState(false);
+
+  /**
+   * Stack the file list above the diff when the pane is too narrow to hold
+   * both side by side.
+   *
+   * A fixed 240px list beside a diff is fine in a wide pane and useless in a
+   * slim one -- at 650px the diff got what was left and rendered "select a
+   * file" as two wrapped words. Measured rather than assumed, because a pane
+   * is resized by dragging a divider, not by resizing the window.
+   */
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const el = hostRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setNarrow((entry?.contentRect.width ?? 0) < STACK_BELOW_PX);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const refresh = useCallback(async () => {
     setBusy(true);
     const r = await window.th.gitRoot(props.cwd);
     setRoot(r);
-    if (r) {
-      const [s, w] = await Promise.all([
-        window.th.gitStatus(r) as Promise<RepoStatus | null>,
-        window.th.gitWorktrees(r) as Promise<Worktree[]>,
-      ]);
-      setStatus(s);
-      setWorktrees(w);
-    }
+    // Status only: this polls every 3s, and `git worktree list` was a second
+    // subprocess per tick for a list nothing reads any more.
+    if (r) setStatus((await window.th.gitStatus(r)) as RepoStatus | null);
     setBusy(false);
   }, [props.cwd]);
+
+  /**
+   * Stage or unstage specific paths, then re-read.
+   *
+   * The refresh is what redraws the row: a staged file's `+` becomes `−`, and
+   * the commit form's counts above follow from the same status.
+   */
+  const stagePaths = useCallback(async (paths: string[]) => {
+    if (!root) return;
+    await window.th.gitStage(root, paths);
+    await refresh();
+  }, [root, refresh]);
+
+  const unstagePaths = useCallback(async (paths: string[]) => {
+    if (!root) return;
+    await window.th.gitUnstage(root, paths);
+    await refresh();
+  }, [root, refresh]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -62,6 +102,20 @@ export function GitStatusPane(props: {
     const t = setInterval(() => void refresh(), 3000);
     return () => clearInterval(t);
   }, [refresh]);
+
+  /*
+   * The commit form and the panel strip come from one hook so they share
+   * `tab`, but they render on opposite sides of the file list below: commit
+   * above it, graph/stash/worktree under it, which is the order you read in.
+   */
+  const git = useGitActions({
+    root: root ?? "",
+    branch: status?.branch,
+    staged: (status?.files ?? []).filter((f) => f.staged !== null).map((f) => f.path),
+    unstaged: (status?.files ?? []).filter((f) => f.unstaged !== null).map((f) => f.path),
+    onChanged: () => void refresh(),
+    onOpen: props.onOpen,
+  });
 
   const openFile = useCallback(async (f: FileChange) => {
     setSelected(f);
@@ -86,7 +140,7 @@ export function GitStatusPane(props: {
   }
 
   return (
-    <div style={S.pane}>
+    <div ref={hostRef} style={S.pane}>
       <div style={S.header}>
         <span style={{ color: C.accent }}>⎇ {status?.branch ?? "(detached)"}</span>
         {status && (status.ahead > 0 || status.behind > 0) && (
@@ -98,29 +152,19 @@ export function GitStatusPane(props: {
         <span style={{ color: C.faint }}>{status?.files.length ?? 0} changed</span>
       </div>
 
-      <GitActions
-        root={root}
-        branch={status?.branch}
-        staged={(status?.files ?? []).filter((f) => f.staged !== null).map((f) => f.path)}
-        unstaged={(status?.files ?? []).filter((f) => f.unstaged !== null).map((f) => f.path)}
-        onChanged={() => void refresh()}
-        onOpen={props.onOpen}
-      />
+      {git.form}
 
-      <div style={S.split}>
-        <div style={S.list}>
-          {worktrees.length > 1 && (
-            <>
-              <div style={S.sectionLabel}>worktrees</div>
-              {worktrees.map((w) => (
-                <div key={w.path} style={{ ...S.row, color: w.current ? C.fg : C.faint }}>
-                  <span style={{ width: 12 }}>{w.current ? "●" : "○"}</span>
-                  <span style={S.ellipsis}>{w.branch ?? "(detached)"}</span>
-                </div>
-              ))}
-            </>
-          )}
-
+      <div style={{ ...S.split, flexDirection: narrow ? "column" : "row" }}>
+        <div style={narrow ? S.listStacked : S.list}>
+          {/*
+            * No worktree list here.
+            *
+            * It was read-only -- a dot and a branch name, nothing to click --
+            * and it cost seven rows above the changes list, which is what this
+            * sidebar is for. Everything it said is said better elsewhere: the
+            * header above names the branch you are in, the pane's own worktree
+            * tab creates and closes them, and the toolbar picker switches.
+            */}
           <div style={S.sectionLabel}>changes</div>
           {(status?.files ?? []).length === 0 && (
             <div style={{ ...S.row, color: C.faint }}>clean</div>
@@ -141,6 +185,42 @@ export function GitStatusPane(props: {
               <span style={{ ...S.ellipsis, color: selected?.path === f.path ? C.fg : C.dim }}>
                 {f.path}
               </span>
+              {/*
+                * Per file, because "stage all (13)" is no help when three of
+                * the thirteen belong in this commit.
+                *
+                * A file can be staged and unstaged at once -- edited, staged,
+                * then edited again -- so these are two independent conditions
+                * rather than one either/or: that file gets both buttons, and
+                * each acts on its own half.
+                *
+                * The click must not reach the row, which selects the file and
+                * loads its diff.
+                */}
+              {f.unstaged !== null && (
+                <button
+                  style={S.rowBtn}
+                  title={`Stage ${f.path}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (root) void stagePaths([f.path]);
+                  }}
+                >
+                  +
+                </button>
+              )}
+              {f.staged !== null && (
+                <button
+                  style={S.rowBtn}
+                  title={`Unstage ${f.path}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (root) void unstagePaths([f.path]);
+                  }}
+                >
+                  −
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -208,6 +288,9 @@ export function GitStatusPane(props: {
           )}
         </div>
       </div>
+
+      {/* The lower half: whichever of graph/stash/worktree is open. */}
+      <div style={S.panels}>{git.panels}</div>
     </div>
   );
 }
@@ -218,12 +301,39 @@ const S: Record<string, React.CSSProperties> = {
   header: { display: "flex", gap: 6, alignItems: "center", padding: "5px 9px",
             background: C.panel, borderBottom: `1px solid ${C.line}`, flexShrink: 0 },
   split: { display: "flex", flex: 1, minHeight: 0 },
+  /*
+   * The lower half. Capped and scrollable so an open panel -- 54 stashes, a
+   * long graph -- cannot push the file list above it off the pane.
+   */
+  panels: { display: "flex", flexDirection: "column", minHeight: 0, maxHeight: "55%",
+            overflowY: "auto", flexShrink: 0, borderTop: `1px solid ${C.line}` },
   list: { width: 240, flexShrink: 0, overflowY: "auto", borderRight: `1px solid ${C.line}`,
           padding: "4px 0" },
+  /*
+   * Stacked: full width, and the divider moves to the bottom edge. The height
+   * is capped rather than proportional so a long change list cannot push the
+   * diff off the pane -- 45% leaves the diff the larger share, since it is the
+   * thing being read.
+   */
+  listStacked: {
+    width: "100%", flexShrink: 0, maxHeight: "45%", overflowY: "auto",
+    borderBottom: `1px solid ${C.line}`, padding: "4px 0",
+  },
   sectionLabel: { color: C.faint, fontSize: 10, textTransform: "uppercase",
                   padding: "6px 9px 2px", letterSpacing: 0.5 },
   row: { display: "flex", gap: 5, alignItems: "center", padding: "2px 9px", lineHeight: "17px" },
   ellipsis: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 },
+  /*
+   * Square and small: the row is a 17px line, and these sit at the end of a
+   * path that is already ellipsised, so they must cost almost no width.
+   * `flexShrink: 0` keeps them from being squeezed away when the pane is
+   * narrow -- which is exactly when a long path wants to eat the row.
+   */
+  rowBtn: {
+    background: "transparent", border: `1px solid ${C.line}`, color: C.dim,
+    borderRadius: 3, width: 17, height: 15, lineHeight: "13px", padding: 0,
+    cursor: "pointer", fontSize: 12, flexShrink: 0,
+  },
   diff: { flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" },
   diffHeader: { display: "flex", gap: 8, alignItems: "center", padding: "5px 9px",
                 borderBottom: `1px solid ${C.line}`, color: C.dim, flexShrink: 0 },
