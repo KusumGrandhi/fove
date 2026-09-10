@@ -136,6 +136,221 @@ export function LayoutMenu(props: {
   );
 }
 
+/**
+ * One entry in a ToolMenu. `hint` is the shortcut, shown right-aligned.
+ *
+ * An entry carrying `items` is a submenu: it opens a second level on hover
+ * instead of acting, so `onSelect` is not used for those.
+ */
+export interface ToolMenuItem {
+  label: string;
+  hint?: string;
+  icon?: ReactNode;
+  onSelect?: () => void;
+  disabled?: boolean;
+  /** Nested entries. Present means this row opens a submenu. */
+  items?: ToolMenuItem[];
+  /** Marks the chosen entry in a submenu of alternatives. */
+  checked?: boolean;
+}
+
+/**
+ * A group of toolbar actions behind one labelled button.
+ *
+ * Opens on hover and closes when the pointer leaves the button *and* the menu
+ * both -- the two are separate elements with a 4px gap between them, so
+ * tracking either alone would shut the menu while the pointer crosses that
+ * gap. A close is therefore deferred by a short grace period that any re-entry
+ * cancels; a click still toggles, for anyone who would rather not hover.
+ *
+ * Keyboard shortcuts on the items keep working whether or not the menu is ever
+ * opened -- the menu is for finding an action, not for issuing it.
+ */
+export function ToolMenu(props: {
+  label: string;
+  icon?: ReactNode;
+  items: ToolMenuItem[];
+  /** Explanatory line under the items, like LayoutMenu's. */
+  note?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  /** Pending close, so crossing the gap to the menu does not dismiss it. */
+  const closeTimer = useRef<number | null>(null);
+
+  const cancelClose = () => {
+    if (closeTimer.current !== null) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+  const scheduleClose = () => {
+    cancelClose();
+    closeTimer.current = window.setTimeout(() => setOpen(false), 160);
+  };
+
+  /** Measure at open time: the toolbar scrolls, so the rect is not fixed. */
+  const openAt = (el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    setAt({ top: r.bottom + 4, left: r.left });
+    setOpen(true);
+  };
+
+  useEffect(() => cancelClose, []);
+
+  // Dismiss on an outside click or Escape, like every other menu on the system.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as globalThis.Node;
+      if (!hostRef.current?.contains(t) && !menuRef.current?.contains(t)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); setOpen(false); }
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [open]);
+
+  return (
+    <div
+      ref={hostRef}
+      style={{ position: "relative", WebkitAppRegion: "no-drag" } as CSSProperties}
+      onMouseEnter={(e) => { cancelClose(); openAt(e.currentTarget); }}
+      onMouseLeave={scheduleClose}
+    >
+      <button
+        onClick={(e) => {
+          cancelClose();
+          if (open) setOpen(false);
+          else openAt(e.currentTarget);
+        }}
+        title={props.label}
+        style={{ ...btn, color: open ? C.fg : C.dim, background: open ? C.chromeHi : "transparent" }}
+      >
+        {props.icon && <span style={{ fontSize: 13, lineHeight: 1 }}>{props.icon}</span>}
+        <span>{props.label}</span>
+        <span style={{ fontSize: 9, color: C.faint }}>▾</span>
+      </button>
+
+      {open && (
+        <div
+          ref={menuRef}
+          style={{ ...menu, top: at.top, left: at.left, minWidth: 210 }}
+          onMouseEnter={cancelClose}
+          onMouseLeave={scheduleClose}
+        >
+          {props.items.map((it) => (
+            <MenuRow key={it.label} item={it} onDone={() => setOpen(false)} />
+          ))}
+          {props.note && <div style={menuNote}>{props.note}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One row of a ToolMenu: an action, or a submenu that opens on hover.
+ *
+ * The submenu is positioned from the row's measured rect, like the parent
+ * menu is from its button, and flips to the left when it would run off the
+ * right edge of the window. It shares the parent's grace period by simply
+ * living inside it -- the pointer never leaves the parent menu's subtree
+ * while travelling into the submenu, so the parent's own close timer is
+ * never armed.
+ */
+function MenuRow(props: { item: ToolMenuItem; onDone: () => void }) {
+  const { item } = props;
+  const [sub, setSub] = useState<{ top: number; left: number } | null>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const closeTimer = useRef<number | null>(null);
+
+  const cancel = () => {
+    if (closeTimer.current !== null) { clearTimeout(closeTimer.current); closeTimer.current = null; }
+  };
+  const scheduleClose = () => {
+    cancel();
+    closeTimer.current = window.setTimeout(() => setSub(null), 160);
+  };
+  useEffect(() => cancel, []);
+
+  if (!item.items) {
+    return (
+      <button
+        disabled={item.disabled}
+        onClick={() => { props.onDone(); item.onSelect?.(); }}
+        style={{
+          ...menuItem,
+          // A row, not LayoutMenu's stacked label+hint: these carry a
+          // shortcut rather than a sentence of explanation.
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 8,
+          opacity: item.disabled ? 0.35 : 1,
+          cursor: item.disabled ? "default" : "pointer",
+        }}
+        onMouseEnter={(e) => { if (!item.disabled) e.currentTarget.style.background = C.chromeHi; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+      >
+        {item.icon && (
+          <span style={{ fontSize: 13, lineHeight: 1, width: 15, color: C.dim }}>{item.icon}</span>
+        )}
+        <span style={{ color: C.fg, fontSize: 12, flex: 1 }}>{item.label}</span>
+        {item.checked && <span style={{ color: C.accent, fontSize: 11 }}>✓</span>}
+        {item.hint && <kbd style={kbdStyle}>{item.hint}</kbd>}
+      </button>
+    );
+  }
+
+  return (
+    <div
+      ref={rowRef}
+      style={{ position: "relative" }}
+      onMouseEnter={(e) => {
+        cancel();
+        const r = e.currentTarget.getBoundingClientRect();
+        // Flip left when a right-hand submenu would leave the window.
+        const width = 190;
+        const spill = r.right + width > window.innerWidth;
+        setSub({ top: r.top - 4, left: spill ? r.left - width : r.right + 2 });
+      }}
+      onMouseLeave={scheduleClose}
+    >
+      <div
+        style={{
+          ...menuItem, flexDirection: "row", alignItems: "center", gap: 8,
+          background: sub ? C.chromeHi : "transparent",
+        }}
+      >
+        {item.icon && (
+          <span style={{ fontSize: 13, lineHeight: 1, width: 15, color: C.dim }}>{item.icon}</span>
+        )}
+        <span style={{ color: C.fg, fontSize: 12, flex: 1 }}>{item.label}</span>
+        <span style={{ fontSize: 9, color: C.faint }}>▸</span>
+      </div>
+
+      {sub && (
+        <div
+          style={{ ...menu, top: sub.top, left: sub.left, minWidth: 190 }}
+          onMouseEnter={cancel}
+          onMouseLeave={scheduleClose}
+        >
+          {item.items.map((s) => (
+            <MenuRow key={s.label} item={s} onDone={props.onDone} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Divider() {
   return <div style={{ width: 1, height: 18, background: C.line, margin: "0 5px", flexShrink: 0 }} />;
 }

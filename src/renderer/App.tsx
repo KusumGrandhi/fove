@@ -20,7 +20,7 @@ import { DiffView, type DiffRequest } from "./panes/DiffView.js";
 import { ModelPicker, type Provider } from "./ui/ModelPicker.js";
 import { AgentsWidget, TokensWidget, useSnapshot } from "./ui/widgets.js";
 import { TeammateBar, TeammateView, useTeammates } from "./ui/Teammates.js";
-import { C, Divider, LayoutMenu, ToolButton } from "./ui/Chrome.js";
+import { C, Divider, LayoutMenu, ToolButton, ToolMenu } from "./ui/Chrome.js";
 import { Palette, type PaletteItem } from "./ui/Palette.js";
 import { Keel, type TurnReview } from "./ui/Keel.js";
 import { KeelWorkspace, type WorklistWire, type CardWire } from "./ui/KeelWorkspace.js";
@@ -942,19 +942,65 @@ export function App() {
       <div style={S.toolbar}>
         <LayoutMenu presets={PRESETS} current={preset} onPick={applyPreset} />
         <Divider />
-        <ToolButton label="Split" hint="⌘D" icon="▊▊" onClick={() => doSplit("row")} />
-        <ToolButton label="Split down" hint="⌘⇧D" icon="▤" onClick={() => doSplit("column")} />
-        <Divider />
-        <ToolButton label="Claude" hint="⌘↵" icon="✳" onClick={() => doSplit("row", "claude")} />
-        <ToolButton label="Shell" icon="❯" onClick={() => doSplit("row", "shell")} />
-        <ToolButton label="Git" hint="⌘G" icon="⎇" onClick={() => doSplit("row", "git")} />
-        <ToolButton label="Editor" hint="⌘E" icon="◧" onClick={() => doSplit("row", "editor")} />
-        <ToolButton label="Agents" hint="⌘R" icon="◉" onClick={() => doSplit("row", "agents")} />
-        <ToolButton label="Model" hint="⌘M" icon="◈" onClick={() => setPickerOpen(true)} />
-        <ToolButton label="Search" hint="⌘⇧F" icon="⌕" onClick={() => doSplit("row", "search")} />
-        <ToolButton label="Browser" hint="⌘B" icon="◍" onClick={() => doSplit("row", "browser")} />
-        <ToolButton label="Debug" icon="◆" onClick={() => doSplit("row", "debug")} />
-        <ToolButton label="Config" hint="⌘K" icon="⚙" onClick={() => doSplit("row", "config")} />
+        {/*
+          * Fifteen buttons in one row was more than a row can carry: on a
+          * narrow window the toolbar scrolled, and scanning it to find a pane
+          * kind took longer than remembering the shortcut. Grouped by what
+          * you are reaching for -- the model and its agents, the code, the
+          * workspace itself. Every shortcut still fires without opening a
+          * menu, so this is discovery, not the fast path.
+          */}
+        <ToolMenu
+          label="AI"
+          icon="✳"
+          items={[
+            { label: "Claude", hint: "⌘↵", icon: "✳", onSelect: () => doSplit("row", "claude") },
+            { label: "Agents", hint: "⌘R", icon: "◉", onSelect: () => doSplit("row", "agents") },
+            { label: "Model", hint: "⌘M", icon: "◈", onSelect: () => setPickerOpen(true) },
+          ]}
+        />
+        <ToolMenu
+          label="Dev"
+          icon="◧"
+          items={[
+            { label: "Editor", hint: "⌘E", icon: "◧", onSelect: () => doSplit("row", "editor") },
+            { label: "Shell", icon: "❯", onSelect: () => doSplit("row", "shell") },
+            { label: "Git", hint: "⌘G", icon: "⎇", onSelect: () => doSplit("row", "git") },
+            { label: "Search", hint: "⌘⇧F", icon: "⌕", onSelect: () => doSplit("row", "search") },
+            { label: "Browser", hint: "⌘B", icon: "◍", onSelect: () => doSplit("row", "browser") },
+            { label: "Debug", icon: "◆", onSelect: () => doSplit("row", "debug") },
+            { label: "Config", hint: "⌘K", icon: "⚙", onSelect: () => doSplit("row", "config") },
+          ]}
+        />
+        <ToolMenu
+          label="Workspace"
+          icon="▦"
+          items={[
+            { label: "Split right", hint: "⌘D", icon: "▊▊", onSelect: () => doSplit("row") },
+            { label: "Split down", hint: "⌘⇧D", icon: "▤", onSelect: () => doSplit("column") },
+            {
+              label: active && panePins.has(active.focusedPaneId) ? "Unpin pane" : "Pin pane",
+              hint: "⌘P",
+              icon: active && panePins.has(active.focusedPaneId) ? "📌" : "⚲",
+              onSelect: () => { if (active) togglePanePin(active.focusedPaneId); },
+              disabled: !active,
+            },
+            { label: "Open folder…", hint: "⌘T", icon: "＋", onSelect: () => void addTab() },
+            { label: "Go to…", hint: "⌘O", icon: "⎇", onSelect: openPalette },
+            {
+              // A submenu, not a cycling label: with five themes, cycling
+              // means up to four wrong repaints on the way to the one you
+              // wanted -- the same reason LayoutMenu is a dropdown.
+              label: "Theme",
+              icon: "◐",
+              items: THEMES.map((t) => ({
+                label: t.label,
+                checked: t.id === themeId,
+                onSelect: () => setThemeId(t.id),
+              })),
+            },
+          ]}
+        />
         {/*
           * Switching worktree, in one visible control.
           *
@@ -988,24 +1034,6 @@ export function App() {
             </select>
           </>
         )}
-        <ToolButton
-          label={THEMES.find((t) => t.id === themeId)?.label ?? "Theme"}
-          icon="◐"
-          onClick={() => {
-            const i = THEMES.findIndex((t) => t.id === themeId);
-            setThemeId(THEMES[(i + 1) % THEMES.length]!.id);
-          }}
-        />
-        <Divider />
-        <ToolButton
-          label={active && panePins.has(active.focusedPaneId) ? "Unpin pane" : "Pin pane"}
-          hint="⌘P"
-          icon={active && panePins.has(active.focusedPaneId) ? "📌" : "⚲"}
-          onClick={() => { if (active) togglePanePin(active.focusedPaneId); }}
-        />
-        <Divider />
-        <ToolButton label="Open folder" hint="⌘T" icon="＋" onClick={() => void addTab()} />
-        <ToolButton label="Go to…" hint="⌘O" icon="⎇" onClick={openPalette} />
         <div style={S.grow} />
         <ToolButton
           label="Close pane"
