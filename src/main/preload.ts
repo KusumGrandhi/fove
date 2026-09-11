@@ -288,8 +288,11 @@ const api = {
     ipcRenderer.on(CH.searchMatch, h);
     return () => { ipcRenderer.removeListener(CH.searchMatch, h); };
   },
-  onSearchDone: (fn: (id: string, count: number, truncated: boolean) => void): (() => void) => {
-    const h = (_e: unknown, id: string, c: number, t: boolean): void => fn(id, c, t);
+  onSearchDone: (
+    fn: (id: string, count: number, truncated: boolean, reason?: string) => void,
+  ): (() => void) => {
+    const h = (_e: unknown, id: string, c: number, t: boolean, reason?: string): void =>
+      fn(id, c, t, reason);
     ipcRenderer.on(CH.searchDone, h);
     return () => { ipcRenderer.removeListener(CH.searchDone, h); };
   },

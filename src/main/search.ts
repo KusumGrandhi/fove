@@ -16,6 +16,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { spawnEnv } from "./loginPath.js";
 
 /** Never return an unbounded result set: the UI cannot use 200k rows. */
 const MAX_MATCHES = 2000;
@@ -127,19 +128,48 @@ function pathMatcher(
   };
 }
 
+/**
+ * The environment `rg` is spawned with, resolved once.
+ *
+ * A Finder-launched Electron app inherits a minimal PATH -- `/usr/bin:/bin`
+ * and little else -- which does not contain Homebrew's `rg`. Without this the
+ * spawn fails with ENOENT, the error path reports zero matches, and search
+ * answers "no matches" for a word that is in fifty files. It works when the
+ * app is started from a terminal, which is exactly what makes the bug easy to
+ * ship: `npm run dev` inherits a real PATH and the installed app does not.
+ *
+ * Resolved once and reused: `loginPath()` spawns a login shell, which is far
+ * too slow to do on every keystroke of a debounced search. The promise is
+ * cached rather than the value so concurrent searches share one resolution.
+ */
+let envOnce: Promise<NodeJS.ProcessEnv> | undefined;
+function rgEnv(): Promise<NodeJS.ProcessEnv> {
+  envOnce ??= spawnEnv();
+  return envOnce;
+}
+
 export class SearchService {
   /** The in-flight search per requester id, so a new one supersedes it. */
   private readonly running = new Map<string, ChildProcess>();
 
+  /**
+   * Bumped on every `start`, to discard a search that was superseded while
+   * its environment was still being resolved.
+   */
+  private generation = 0;
+
   constructor(
     private readonly onMatch: (id: string, matches: SearchMatch[]) => void,
     private readonly onDone: (id: string, count: number, truncated: boolean) => void,
+    /** Why a search could not run at all, when that is the reason for no results. */
+    private readonly onFailed?: (id: string, reason: string) => void,
   ) {}
 
   /** Whether ripgrep is available at all, so the UI can say so plainly. */
   static async available(): Promise<boolean> {
+    const env = await rgEnv();
     return new Promise((resolve) => {
-      const child = spawn("rg", ["--version"], { stdio: "ignore" });
+      const child = spawn("rg", ["--version"], { stdio: "ignore", env });
       child.on("error", () => resolve(false));
       child.on("exit", (code) => resolve(code === 0));
     });
@@ -170,9 +200,23 @@ export class SearchService {
       this.onDone(id, 0, false);
       return;
     }
-    // Filenames first: they are usually what a bare word like "AGENTS.md"
-    // means, and they finish fast enough to appear before the content hits.
-    this.searchPaths(id, q, (pathCount) => this.searchContents(id, q, pathCount));
+    /*
+     * The env is resolved before either pass starts, so both spawn with the
+     * same PATH and neither method has to be async.
+     *
+     * A search superseded while the env was still resolving must not start:
+     * `cancel` ran before this promise settled, so there is nothing in
+     * `running` to kill, and the pass would otherwise spawn an orphan that
+     * outlives the query that asked for it.
+     */
+    const generation = ++this.generation;
+    void rgEnv().then((env) => {
+      if (generation !== this.generation) return;
+      // Filenames first: they are usually what a bare word like "AGENTS.md"
+      // means, and they finish fast enough to appear before the content hits.
+      this.searchPaths(id, q, env, (pathCount) =>
+        this.searchContents(id, q, env, pathCount));
+    });
   }
 
   /**
@@ -182,11 +226,16 @@ export class SearchService {
    * single invocation that reports both, and a path hit has no line number,
    * so it is a different kind of result rather than a variation on one.
    */
-  private searchPaths(id: string, q: SearchQuery, done: (count: number) => void): void {
+  private searchPaths(
+    id: string,
+    q: SearchQuery,
+    env: NodeJS.ProcessEnv,
+    done: (count: number) => void,
+  ): void {
     const args = ["--files"];
     for (const glob of q.globs ?? []) args.push("--glob", glob);
 
-    const child = spawn("rg", args, { cwd: q.cwd });
+    const child = spawn("rg", args, { cwd: q.cwd, env });
     this.running.set(id, child);
 
     const needle = q.caseSensitive ? q.query : q.query.toLowerCase();
@@ -250,7 +299,12 @@ export class SearchService {
   }
 
   /** Match the query against file contents. */
-  private searchContents(id: string, q: SearchQuery, priorCount: number): void {
+  private searchContents(
+    id: string,
+    q: SearchQuery,
+    env: NodeJS.ProcessEnv,
+    priorCount: number,
+  ): void {
     const args = ["--json", "--line-number", "--max-count", "200"];
     if (!q.regex) args.push("--fixed-strings");
     args.push(q.caseSensitive ? "--case-sensitive" : "--ignore-case");
@@ -259,7 +313,7 @@ export class SearchService {
     // `--` so a query beginning with a dash is a pattern, not a flag.
     args.push("--", q.query, ".");
 
-    const child = spawn("rg", args, { cwd: q.cwd });
+    const child = spawn("rg", args, { cwd: q.cwd, env });
     this.running.set(id, child);
 
     let count = priorCount;
@@ -310,9 +364,20 @@ export class SearchService {
       if (batch.length >= 50) flush();
     });
 
-    child.on("error", () => {
-      // rg missing or unable to start: report an end rather than hanging.
+    child.on("error", (err) => {
+      /*
+       * rg could not be started. Say so, rather than reporting zero matches.
+       *
+       * "no matches" for a word that is in fifty files is a confident wrong
+       * answer, and it sent this bug undiagnosed through a release: the
+       * failure looked exactly like an empty result. ENOENT here almost
+       * always means `rg` is not on the PATH the app inherited.
+       */
       this.running.delete(id);
+      const why = (err as NodeJS.ErrnoException).code === "ENOENT"
+        ? "ripgrep (rg) was not found on PATH"
+        : `ripgrep could not start: ${err.message}`;
+      this.onFailed?.(id, why);
       this.onDone(id, count, false);
     });
 

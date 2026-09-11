@@ -350,9 +350,22 @@ ipcMain.on(CH.fsWatch, (_e, dirs: string[]) => watcher.sync(dirs ?? []));
 
 // ---- workspace recipes ----------------------------------------------------
 // ---- search and diagnostics -----------------------------------------------
+/**
+ * The reason a search could not run, held until its `done` fires.
+ *
+ * Reusing the existing done channel rather than adding a `search:failed`
+ * one: the renderer already handles exactly one terminal event per search,
+ * and a second channel would mean two orderings to get right for a string.
+ */
+const searchFailures = new Map<string, string>();
 const searcher = new SearchService(
   (id, matches) => send(CH.searchMatch, id, matches),
-  (id, count, truncated) => send(CH.searchDone, id, count, truncated),
+  (id, count, truncated) => {
+    const reason = searchFailures.get(id);
+    searchFailures.delete(id);
+    send(CH.searchDone, id, count, truncated, reason);
+  },
+  (id, reason) => searchFailures.set(id, reason),
 );
 const linter = new LintService();
 

@@ -49,13 +49,16 @@ export function SearchPane(props: {
       if (gotId !== id) return;
       setMatches((prev) => [...prev, ...(batch as Match[])]);
     });
-    const offDone = window.th.onSearchDone((gotId, count, truncated) => {
+    const offDone = window.th.onSearchDone((gotId, count, truncated, reason) => {
       if (gotId !== id) return;
       setSearching(false);
       setStatus(
-        count === 0
-          ? noMatchHint(queryRef.current, regexRef.current)
-          : `${count} match${count === 1 ? "" : "es"}${truncated ? " (stopped at the cap)" : ""}`,
+        // A search that could not run is not a search that found nothing.
+        reason
+          ? reason
+          : count === 0
+            ? noMatchHint(queryRef.current, regexRef.current)
+            : `${count} match${count === 1 ? "" : "es"}${truncated ? " (stopped at the cap)" : ""}`,
       );
     });
     return () => { offMatch(); offDone(); };

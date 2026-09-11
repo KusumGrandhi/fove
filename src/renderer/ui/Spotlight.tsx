@@ -77,6 +77,8 @@ export function Spotlight(props: {
   const [searching, setSearching] = useState(false);
   /** Set once a search has completed, so "no matches" waits for an answer. */
   const [settled, setSettled] = useState(false);
+  /** Why the search could not run at all, if that is what happened. */
+  const [failure, setFailure] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -85,10 +87,12 @@ export function Spotlight(props: {
       if (gotId !== id) return;
       setMatches((prev) => [...prev, ...(batch as Match[])]);
     });
-    const offDone = window.th.onSearchDone((gotId) => {
+    const offDone = window.th.onSearchDone((gotId, _count, _truncated, reason) => {
       if (gotId !== id) return;
       setSearching(false);
       setSettled(true);
+      // A search that could not run is not a search that found nothing.
+      setFailure(reason ?? null);
     });
     return () => { offMatch(); offDone(); };
   }, [id]);
@@ -238,7 +242,9 @@ export function Spotlight(props: {
                 ? "Type to find a file by name, or any text in the code."
                 : searching || !settled
                   ? "searching…"
-                  : "no matches"}
+                  : failure
+                    ? failure
+                    : "no matches"}
             </div>
           )}
 
