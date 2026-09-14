@@ -112,6 +112,27 @@ const makePane = (kind: PaneKind, cwd?: string): PaneSpec => ({
 });
 
 /**
+ * Environment that points a claude pane at a provider.
+ *
+ * Anthropic itself gets an empty environment rather than an explicit base URL:
+ * the CLI's own defaults and login are what should apply there.
+ */
+function providerEnvFor(p: Provider, model: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  if (!p.thirdParty) return env;
+  env.ANTHROPIC_BASE_URL = p.baseUrl;
+  // The key itself never reaches the renderer: the main process resolves it
+  // from the named variable when it spawns the PTY.
+  env.FOVE_PROVIDER_TOKEN_ENV = p.authTokenEnv;
+  if (model) env.ANTHROPIC_MODEL = model;
+  return env;
+}
+
+function providerLabelFor(p: Provider, model: string): string | undefined {
+  return p.thirdParty ? `${p.label}${model ? ` · ${model}` : ""}` : undefined;
+}
+
+/**
  * A new workspace, arranged by a starting layout.
  *
  * `preset` is what a workspace begins as, not what it is: the tree is a normal
@@ -547,18 +568,10 @@ export function App() {
   const launchProvider = useCallback(
     (p: Provider, model: string) => {
       if (!active) return;
-      const env: Record<string, string> = {};
-      if (p.thirdParty) {
-        env.ANTHROPIC_BASE_URL = p.baseUrl;
-        // The key itself never reaches the renderer: the main process resolves
-        // it from the named variable when it spawns the PTY.
-        env.FOVE_PROVIDER_TOKEN_ENV = p.authTokenEnv;
-        if (model) env.ANTHROPIC_MODEL = model;
-      }
       const pane: PaneSpec = {
         ...makePane("claude", active.cwd),
-        providerEnv: env,
-        providerLabel: p.thirdParty ? `${p.label}${model ? ` · ${model}` : ""}` : undefined,
+        providerEnv: providerEnvFor(p, model),
+        providerLabel: providerLabelFor(p, model),
       };
       updateTab(active.id, (t) => ({
         ...t,
@@ -569,6 +582,32 @@ export function App() {
     },
     [active, updateTab],
   );
+
+  /**
+   * The backend a claude pane starts on when it was not pointed anywhere.
+   *
+   * Resolved here rather than baked into each pane at creation time, so the
+   * saved default reaches every path that makes one -- new tab, layout preset,
+   * restored session -- and a pane the user pointed explicitly still wins.
+   */
+  const [defaultBackend, setDefaultBackend] = useState<
+    { env: Record<string, string>; label?: string } | null
+  >(null);
+
+  const readDefault = useCallback(async () => {
+    const r = (await window.th.providers()) as {
+      providers: Provider[];
+      default: { providerId: string; model: string } | null;
+    };
+    const saved = r?.default;
+    const p = saved ? r.providers.find((x) => x.id === saved.providerId) : undefined;
+    // A default naming a provider that has since lost its key is dropped rather
+    // than honoured, so a plain pane never starts on a backend it cannot reach.
+    if (!p || !saved || p.usable === false) { setDefaultBackend(null); return; }
+    setDefaultBackend({ env: providerEnvFor(p, saved.model), label: providerLabelFor(p, saved.model) });
+  }, []);
+
+  useEffect(() => { void readDefault(); }, [readDefault]);
 
   const answerDiff = useCallback((id: string, verdict: "saved" | "rejected") => {
     window.th.ideDiffResult(id, verdict);
@@ -1160,6 +1199,7 @@ export function App() {
           cwd={active.cwd}
           onClose={() => setPickerOpen(false)}
           onLaunch={launchProvider}
+          onDefaultChanged={() => { void readDefault(); }}
         />
       )}
 
@@ -1267,7 +1307,10 @@ export function App() {
                   >
                     <span style={{ ...S.gripDots, opacity: isPin ? 0.25 : 1 }}>⠿</span>
                     <span style={{ color: focused ? C.fg : C.faint }}>
-                      {spec.kind === "claude" ? (spec.providerLabel ? `✳ ${spec.providerLabel}` : "✳ claude")
+                      {spec.kind === "claude"
+                        ? ((spec.providerEnv ? spec.providerLabel : defaultBackend?.label)
+                            ? `✳ ${spec.providerEnv ? spec.providerLabel : defaultBackend?.label}`
+                            : "✳ claude")
                         : spec.kind === "git" ? "⎇ git"
                         : spec.kind === "editor" ? "◧ editor"
                         : spec.kind === "search" ? "⌕ search"
@@ -1379,7 +1422,7 @@ export function App() {
                         cwd={spec.cwd}
                         cmd={spec.kind === "claude" ? "claude" : undefined}
                         args={spec.kind === "claude" ? [] : undefined}
-                        env={spec.providerEnv}
+                        env={spec.providerEnv ?? (spec.kind === "claude" ? defaultBackend?.env : undefined)}
                       />
                     )}
                   </div>

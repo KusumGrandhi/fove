@@ -66,6 +66,7 @@ import { listSessions } from "../data/transcript.js";
 import { openInEditor, revealInFinder } from "./openExternal.js";
 import { installMenu } from "./menu.js";
 import { loadState, saveState } from "./store.js";
+import { getKey } from "./providerKeys.js";
 import { homedir } from "node:os";
 import { launchCwd } from "../shared/launch-cwd.js";
 import { CH, type SpawnRequest } from "../shared/ipc.js";
@@ -166,8 +167,14 @@ ipcMain.handle(CH.ptySpawn, (_e, req: SpawnRequest) => {
   const tokenVar = paneEnv.FOVE_PROVIDER_TOKEN_ENV;
   if (tokenVar) {
     delete paneEnv.FOVE_PROVIDER_TOKEN_ENV;
-    const token = process.env[tokenVar];
+    // Environment first, saved key second -- the same order the picker reports,
+    // so what the dot promises is what the pane actually gets.
+    const token = process.env[tokenVar] ?? getKey(tokenVar);
     if (token) paneEnv.ANTHROPIC_AUTH_TOKEN = token;
+    // A key here goes out as x-api-key and Claude Code reaches Anthropic direct,
+    // silently ignoring the gateway. Empty, not deleted: cleanEnv would otherwise
+    // let the inherited value back in.
+    paneEnv.ANTHROPIC_API_KEY = "";
   }
   ptys.spawn({ ...req, env: paneEnv });
   // Replay history so a remounted pane keeps its scrollback.
@@ -481,14 +488,53 @@ ipcMain.handle(CH.mcpList, async (_e, cwd?: string) => {
 });
 
 ipcMain.handle(CH.providers, async () => {
-  const { loadProviders, tokenFor, UNSUPPORTED_NOTICE } = await import("../data/models/thirdParty.js");
+  const { loadProviders, tokenFor, tokenSource, UNSUPPORTED_NOTICE } =
+    await import("../data/models/thirdParty.js");
+  const { storedLookup } = await import("./providerKeys.js");
+  const { loadDefaultModel } = await import("../data/models/defaultModel.js");
+  const stored = storedLookup();
   const providers = await loadProviders();
   return {
+    default: await loadDefaultModel(),
     // `usable` is resolved here because the renderer cannot read process.env,
-    // and must never be handed the key itself.
-    providers: providers.map((p) => ({ ...p, usable: !p.thirdParty || !!tokenFor(p) })),
+    // and must never be handed the key itself. `keySource` is the most the
+    // renderer needs: enough to offer "forget" for a key this app saved, and to
+    // stay out of the way of one the user exported themselves.
+    providers: providers.map((p) => ({
+      ...p,
+      usable: !p.thirdParty || !!tokenFor(p, stored),
+      keySource: tokenSource(p, stored),
+    })),
     notice: UNSUPPORTED_NOTICE,
   };
+});
+
+ipcMain.handle(CH.providerSetKey, async (_e, name: string, value: string) => {
+  const { setKey } = await import("./providerKeys.js");
+  if (!name || !value?.trim()) return { ok: false, error: "A key is required." };
+  try {
+    setKey(name, value.trim());
+    return { ok: true };
+  } catch (e) {
+    // Most likely no keychain. Falling back to a plaintext file would be worse.
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle(CH.providerClearKey, async (_e, name: string) => {
+  const { clearKey } = await import("./providerKeys.js");
+  try {
+    clearKey(name);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle(CH.providerSetDefault, async (_e, next: { providerId: string; model: string } | null) => {
+  const { saveDefaultModel } = await import("../data/models/defaultModel.js");
+  await saveDefaultModel(next);
+  return { ok: true };
 });
 
 ipcMain.handle(CH.bgSessions, (_e, cwd: string) => backgroundSessions(cwd));

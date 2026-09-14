@@ -67,6 +67,16 @@ describe("OpenRouter", () => {
     expect(or!.notes ?? "").toMatch(/caching/i);
   });
 
+  test("no baseUrl carries the /v1 Claude Code appends itself", async () => {
+    const { BUILTIN_PROVIDERS } = await import("../src/data/models/thirdParty.js");
+    // Claude Code posts to `${ANTHROPIC_BASE_URL}/v1/messages`, so a baseUrl
+    // ending in /v1 produces /v1/v1/messages -- a 404 the CLI misreports as
+    // "the selected model may not exist or you may not have access to it".
+    for (const p of BUILTIN_PROVIDERS) {
+      expect(p.baseUrl, `${p.id} baseUrl`).not.toMatch(/\/v1\/?$/);
+    }
+  });
+
   test("config lives under fove, never in ~/.claude", async () => {
     const { PROVIDERS_PATH } = await import("../src/data/models/thirdParty.js");
     expect(PROVIDERS_PATH).toContain("/.config/fove/");
