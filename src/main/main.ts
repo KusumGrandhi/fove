@@ -171,6 +171,10 @@ ipcMain.handle(CH.ptySpawn, (_e, req: SpawnRequest) => {
     // so what the dot promises is what the pane actually gets.
     const token = process.env[tokenVar] ?? getKey(tokenVar);
     if (token) paneEnv.ANTHROPIC_AUTH_TOKEN = token;
+    // A key here goes out as x-api-key and Claude Code reaches Anthropic direct,
+    // silently ignoring the gateway. Empty, not deleted: cleanEnv would otherwise
+    // let the inherited value back in.
+    paneEnv.ANTHROPIC_API_KEY = "";
   }
   ptys.spawn({ ...req, env: paneEnv });
   // Replay history so a remounted pane keeps its scrollback.

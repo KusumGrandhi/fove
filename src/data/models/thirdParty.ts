@@ -87,7 +87,9 @@ export const BUILTIN_PROVIDERS: Provider[] = [
     // endpoint is what Claude Code can speak.
     id: "openrouter",
     label: "OpenRouter",
-    baseUrl: "https://openrouter.ai/api/v1",
+    // No /v1: Claude Code appends /v1/messages, and /api/v1 makes that
+    // /api/v1/v1/messages, whose 404 it reports as "model may not exist".
+    baseUrl: "https://openrouter.ai/api",
     authTokenEnv: "OPENROUTER_API_KEY",
     models: [
       "anthropic/claude-sonnet-4.5",
