@@ -13,12 +13,31 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { ensureToolPath } from "./loginPath.js";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const run = promisify(execFile);
+const execFileP = promisify(execFile);
 const TEAMS_DIR = join(homedir(), ".claude", "teams");
+
+/**
+ * Every tmux call goes through here, so the login PATH is in place first.
+ *
+ * `tmux` lives in Homebrew's bin, which a GUI-launched app does not have on
+ * its PATH. Without this the spawn fails with ENOENT, every socket reads as
+ * stale, and a workspace full of running teammates reports none -- in the
+ * installed app only, which is what made it hard to see.
+ */
+async function run(
+  cmd: string,
+  args: string[],
+  opts: { windowsHide?: boolean; maxBuffer?: number } = {},
+): Promise<{ stdout: string; stderr: string }> {
+  await ensureToolPath();
+  const { stdout, stderr } = await execFileP(cmd, args, { encoding: "utf8", ...opts });
+  return { stdout, stderr };
+}
 
 export interface Teammate {
   agentId: string;

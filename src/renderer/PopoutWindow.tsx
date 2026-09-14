@@ -27,6 +27,8 @@ interface PoppedPane {
   title: string;
   cwd: string;
   openPath?: string;
+  /** An editor pane popped out while showing a diff reopens as that diff. */
+  openDiff?: { path: string; rev: string; revLabel?: string };
 }
 
 export function PopoutWindow(props: { paneId: string }) {
@@ -88,7 +90,7 @@ export function PopoutWindow(props: { paneId: string }) {
         {pane.kind === "git" ? (
           <GitStatusPane cwd={pane.cwd} />
         ) : pane.kind === "editor" ? (
-          <EditorPane cwd={pane.cwd} initialPath={pane.openPath} />
+          <EditorPane cwd={pane.cwd} initialPath={pane.openPath} initialDiff={pane.openDiff} />
         ) : pane.kind === "agents" ? (
           <AgentsPane cwd={pane.cwd} />
         ) : pane.kind === "config" ? (

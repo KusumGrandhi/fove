@@ -55,6 +55,9 @@ import { WatchService } from "./watch.js";
 import { PopoutService } from "./popout.js";
 import { SearchService } from "./search.js";
 import { LintService } from "./lint.js";
+import { FormatService } from "./format.js";
+import { ProjectService } from "./project.js";
+import { LspService } from "./lsp.js";
 import {
   loadRecipe, saveRecipe, suggestRecipe, createWorktree, applyRecipe, type Recipe,
 } from "./workspace.js";
@@ -64,6 +67,7 @@ import { listMemories } from "../data/config/memory.js";
 import { readSettings, setSkillOverride, nextOverride } from "../data/config/settingsFile.js";
 import { listSessions } from "../data/transcript.js";
 import { openInEditor, revealInFinder } from "./openExternal.js";
+import { ensureToolPath } from "./loginPath.js";
 import { installMenu } from "./menu.js";
 import { loadState, saveState } from "./store.js";
 import { getKey } from "./providerKeys.js";
@@ -127,6 +131,17 @@ function createWindow(): void {
   });
 }
 
+/*
+ * Learn the user's real PATH as early as possible.
+ *
+ * Deliberately not awaited: it spawns a login shell, and blocking the window
+ * on someone's `.zshrc` would trade a launch delay for a bug nobody has yet.
+ * The services that need it await the same cached promise themselves, so the
+ * only thing this buys is that the wait has usually already happened by the
+ * time the first tmux or ruff call is made.
+ */
+void ensureToolPath();
+
 app.whenReady().then(() => {
   createWindow();
   // Advertise this app as an IDE so `claude` panes open files here. Failure is
@@ -151,6 +166,8 @@ app.on("before-quit", () => {
   browsers.closeAll();
   void debugSession.stop();
   searcher.cancelAll();
+  // Language servers index a whole project and would keep running.
+  lsp.stopAll();
   // Remove the lock file, so Claude is never offered a dead IDE.
   void ide.stop();
 });
@@ -210,6 +227,10 @@ ipcMain.handle(CH.gitUntrackedDiff, (_e, cwd: string, path: string) =>
   gitSvc.untrackedDiff(cwd, path),
 );
 ipcMain.handle(CH.gitLog, (_e, cwd: string, limit?: number) => gitSvc.log(cwd, limit));
+ipcMain.handle(CH.gitFileAt, (_e, cwd: string, rev: string, path: string) =>
+  gitSvc.fileAt(cwd, rev, path));
+ipcMain.handle(CH.gitFileLog, (_e, cwd: string, path: string, limit?: number) =>
+  gitSvc.fileLog(cwd, path, limit));
 ipcMain.on(CH.openInEditor, (_e, file: string, line?: number) => openInEditor(file, line));
 ipcMain.on(CH.revealInFinder, (_e, file: string) => revealInFinder(file));
 ipcMain.handle(CH.pickFolder, async () => {
@@ -375,12 +396,23 @@ const searcher = new SearchService(
   (id, reason) => searchFailures.set(id, reason),
 );
 const linter = new LintService();
+const formatter = new FormatService();
+const project = new ProjectService();
+const lsp = new LspService();
 
 ipcMain.on(CH.searchStart, (_e, id: string, q: Parameters<SearchService["start"]>[1]) =>
   searcher.start(id, q),
 );
 ipcMain.on(CH.searchCancel, (_e, id: string) => searcher.cancel(id));
 ipcMain.handle(CH.lintCheck, (_e, path: string, cwd?: string) => linter.check(path, cwd));
+ipcMain.handle(CH.formatRun, (_e, path: string, content: string, cwd?: string) =>
+  formatter.run(path, content, cwd));
+ipcMain.handle(CH.projectSources, (_e, root: string) => project.sources(root));
+ipcMain.handle(CH.lspAvailable, (_e, language: string) => lsp.available(language));
+ipcMain.handle(CH.lspRequest, (_e, root: string, language: string, method: string, params: unknown) =>
+  lsp.request(root, language, method, params));
+ipcMain.on(CH.lspNotify, (_e, root: string, language: string, method: string, params: unknown) =>
+  void lsp.notify(root, language, method, params));
 
 // ---- browser panes --------------------------------------------------------
 /**

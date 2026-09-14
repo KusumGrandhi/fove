@@ -8,6 +8,7 @@
 
 import { execFile } from "node:child_process";
 import { shell } from "electron";
+import { ensureToolPath } from "./loginPath.js";
 
 /**
  * Open `file` in VS Code at `line`. Falls back to the OS default handler when
@@ -15,8 +16,14 @@ import { shell } from "electron";
  */
 export function openInEditor(file: string, line?: number, column = 1): void {
   const target = line ? `${file}:${line}:${column}` : file;
-  execFile("code", ["--goto", target], { windowsHide: true }, (err) => {
-    if (err) void shell.openPath(file);
+  // `code` is installed into /usr/local/bin by VS Code itself, which a
+  // GUI-launched app has no PATH entry for -- so without this the packaged
+  // app always fell through to "open with the default handler", quietly
+  // ignoring the line number it was asked to jump to.
+  void ensureToolPath().then(() => {
+    execFile("code", ["--goto", target], { windowsHide: true }, (err) => {
+      if (err) void shell.openPath(file);
+    });
   });
 }
 

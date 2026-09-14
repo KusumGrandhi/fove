@@ -2,14 +2,19 @@
  * Git pane: what changed, on which branch/worktree.
  *
  * Built for reviewing an agent's work: the change list is the primary content,
- * and clicking a file shows its diff. Files open in fove's own editor pane;
- * "open in VS Code" remains available as an explicit escape hatch on
- * every file and every line -- the easy path, which stays even once an in-app
- * editor exists.
+ * and clicking a file opens its diff *in the editor pane* -- a real Monaco
+ * diff, side-by-side, syntax-highlighted, with an editable working-tree side
+ * you can fix in place and save.
+ *
+ * This pane used to render its own diff in a column beside the list. It was a
+ * hand-rolled hunk renderer squeezed into whatever width was left over, and
+ * everything it did the editor does better and with more room. What is left
+ * here is the part only this pane can do: what changed, what is staged, and
+ * the way through to each one.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { FileChange, FileDiff, RepoStatus } from "../../shared/git-parse.js";
+import { useCallback, useEffect, useState } from "react";
+import type { FileChange, RepoStatus } from "../../shared/git-parse.js";
 import { statusLabel } from "../../shared/git-parse.js";
 import { useGitActions } from "./GitActions.js";
 
@@ -28,44 +33,18 @@ const statusColor = (f: FileChange): string => {
     : C.dim;
 };
 
-/**
- * Below this width the file list and the diff stack instead of sitting side
- * by side. 520px is roughly where a 240px list stops leaving the diff enough
- * room to be worth reading.
- */
-const STACK_BELOW_PX = 520;
-
 export function GitStatusPane(props: {
   cwd: string;
   /** Open a file in fove's own editor pane. */
   onOpen?: (path: string, line?: number) => void;
+  /** Open a file's changes as a diff tab in the editor pane. */
+  onOpenDiff?: (path: string, rev?: string, revLabel?: string) => void;
 }) {
   const [root, setRoot] = useState<string | null>(null);
   const [status, setStatus] = useState<RepoStatus | null>(null);
-  const [selected, setSelected] = useState<FileChange | null>(null);
-  const [diff, setDiff] = useState<FileDiff | null>(null);
+  /** Which row is highlighted -- the one whose diff was last opened. */
+  const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  /**
-   * Stack the file list above the diff when the pane is too narrow to hold
-   * both side by side.
-   *
-   * A fixed 240px list beside a diff is fine in a wide pane and useless in a
-   * slim one -- at 650px the diff got what was left and rendered "select a
-   * file" as two wrapped words. Measured rather than assumed, because a pane
-   * is resized by dragging a divider, not by resizing the window.
-   */
-  const hostRef = useRef<HTMLDivElement>(null);
-  const [narrow, setNarrow] = useState(false);
-  useEffect(() => {
-    const el = hostRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      setNarrow((entry?.contentRect.width ?? 0) < STACK_BELOW_PX);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
 
   const refresh = useCallback(async () => {
     setBusy(true);
@@ -117,19 +96,20 @@ export function GitStatusPane(props: {
     onOpen: props.onOpen,
   });
 
-  const openFile = useCallback(async (f: FileChange) => {
-    setSelected(f);
+  /**
+   * Show one file's changes in the editor pane.
+   *
+   * Always against HEAD, not against the index: "what has changed since the
+   * last commit" is the question being asked when you are reading an agent's
+   * work, and it is the one answer that is the same whether or not you have
+   * already staged some of it. An untracked file has nothing at HEAD, which
+   * the diff renders as an addition -- the same thing git does.
+   */
+  const showDiff = useCallback((f: FileChange) => {
+    setSelected(f.path);
     if (!root) return;
-    // Untracked files have no diff against HEAD; render them as all-additions.
-    const files =
-      f.unstaged === "untracked"
-        ? [await window.th.gitUntrackedDiff(root, f.path)].filter(Boolean)
-        : ((await window.th.gitDiff(root, {
-            path: f.path,
-            staged: f.staged !== null && f.unstaged === null,
-          })) as FileDiff[]);
-    setDiff((files[0] as FileDiff) ?? null);
-  }, [root]);
+    props.onOpenDiff?.(`${root}/${f.path}`, "HEAD", "HEAD");
+  }, [root, props]);
 
   if (!root) {
     return (
@@ -140,7 +120,7 @@ export function GitStatusPane(props: {
   }
 
   return (
-    <div ref={hostRef} style={S.pane}>
+    <div style={S.pane}>
       <div style={S.header}>
         <span style={{ color: C.accent }}>⎇ {status?.branch ?? "(detached)"}</span>
         {status && (status.ahead > 0 || status.behind > 0) && (
@@ -154,8 +134,8 @@ export function GitStatusPane(props: {
 
       {git.form}
 
-      <div style={{ ...S.split, flexDirection: narrow ? "column" : "row" }}>
-        <div style={narrow ? S.listStacked : S.list}>
+      <div style={S.split}>
+        <div style={S.list}>
           {/*
             * No worktree list here.
             *
@@ -172,18 +152,27 @@ export function GitStatusPane(props: {
           {(status?.files ?? []).map((f) => (
             <div
               key={f.path}
-              onClick={() => void openFile(f)}
+              onClick={() => showDiff(f)}
               onDoubleClick={() => props.onOpen?.(`${root}/${f.path}`)}
               style={{
                 ...S.row,
                 cursor: "pointer",
-                background: selected?.path === f.path ? "#1e2636" : undefined,
+                background: selected === f.path ? "#1e2636" : undefined,
               }}
-              title={`${f.path}${f.from ? ` (was ${f.from})` : ""} — double-click to open in the editor`}
+              title={`${f.path}${f.from ? ` (was ${f.from})` : ""} — click for the diff, double-click for the file`}
             >
               <span style={{ width: 14, color: statusColor(f) }}>{statusLabel(f)}</span>
-              <span style={{ ...S.ellipsis, color: selected?.path === f.path ? C.fg : C.dim }}>
-                {f.path}
+              {/*
+                * Filename first, directory dimmed behind it. Twenty paths
+                * that share a prefix are told apart by their last segment,
+                * and leading with the directory buries that segment behind
+                * however many characters the prefix happens to be.
+                */}
+              <span style={{ color: selected === f.path ? C.fg : C.dim, flexShrink: 0 }}>
+                {baseOf(f.path)}
+              </span>
+              <span style={{ ...S.ellipsis, color: C.faint, fontSize: 11 }}>
+                {dirOf(f.path)}
               </span>
               {/*
                 * Per file, because "stage all (13)" is no help when three of
@@ -221,72 +210,21 @@ export function GitStatusPane(props: {
                   −
                 </button>
               )}
+              {/* The escape hatch stays, but is no longer the default. */}
+              <button
+                style={S.rowBtn}
+                title="Open in VS Code"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  window.th.openInEditor(`${root}/${f.path}`);
+                }}
+              >
+                ↗
+              </button>
             </div>
           ))}
         </div>
 
-        <div style={S.diff}>
-          {!selected && <div style={{ color: C.faint, padding: 10 }}>select a file</div>}
-          {selected && diff?.binary && (
-            <div style={{ color: C.faint, padding: 10 }}>binary file</div>
-          )}
-          {selected && diff && !diff.binary && (
-            <>
-              <div style={S.diffHeader}>
-                <span style={S.ellipsis}>{diff.path}</span>
-                <span style={{ color: C.add }}>+{diff.additions}</span>
-                <span style={{ color: C.del }}>−{diff.deletions}</span>
-                <button
-                  style={S.openBtn}
-                  title="Open in the editor pane"
-                  onClick={() => props.onOpen?.(`${root}/${diff.path}`)}
-                >
-                  open
-                </button>
-                {/* The escape hatch stays, but is no longer the default. */}
-                <button
-                  style={S.openBtn}
-                  title="Open in VS Code"
-                  onClick={() => window.th.openInEditor(`${root}/${diff.path}`)}
-                >
-                  ↗
-                </button>
-              </div>
-              <div style={S.diffBody}>
-                {diff.hunks.map((h, hi) => (
-                  <div key={hi}>
-                    <div style={S.hunkHeader}>
-                      @@ {h.oldStart} → {h.newStart} @@ {h.header}
-                    </div>
-                    {h.lines.map((l, li) => (
-                      <div
-                        key={li}
-                        onClick={() =>
-                          props.onOpen?.(`${root}/${diff.path}`, l.newNo ?? l.oldNo)
-                        }
-                        style={{
-                          ...S.diffLine,
-                          background: l.kind === "add" ? "#0e2a16" : l.kind === "del" ? "#2d1214" : undefined,
-                          color: l.kind === "add" ? C.add : l.kind === "del" ? C.del : C.dim,
-                        }}
-                        title="click to open at this line"
-                      >
-                        <span style={S.gutter}>{l.newNo ?? l.oldNo ?? ""}</span>
-                        <span style={{ width: 10 }}>
-                          {l.kind === "add" ? "+" : l.kind === "del" ? "−" : " "}
-                        </span>
-                        <span style={S.code}>{l.text || " "}</span>
-                      </div>
-                    ))}
-                  </div>
-                ))}
-                {diff.hunks.length === 0 && (
-                  <div style={{ color: C.faint, padding: 10 }}>no textual changes</div>
-                )}
-              </div>
-            </>
-          )}
-        </div>
       </div>
 
       {/* The lower half: whichever of graph/stash/worktree is open. */}
@@ -307,18 +245,11 @@ const S: Record<string, React.CSSProperties> = {
    */
   panels: { display: "flex", flexDirection: "column", minHeight: 0, maxHeight: "55%",
             overflowY: "auto", flexShrink: 0, borderTop: `1px solid ${C.line}` },
-  list: { width: 240, flexShrink: 0, overflowY: "auto", borderRight: `1px solid ${C.line}`,
-          padding: "4px 0" },
   /*
-   * Stacked: full width, and the divider moves to the bottom edge. The height
-   * is capped rather than proportional so a long change list cannot push the
-   * diff off the pane -- 45% leaves the diff the larger share, since it is the
-   * thing being read.
+   * The whole width now that the diff lives in the editor. A change list is
+   * mostly paths, and paths are exactly what a 240px column could not show.
    */
-  listStacked: {
-    width: "100%", flexShrink: 0, maxHeight: "45%", overflowY: "auto",
-    borderBottom: `1px solid ${C.line}`, padding: "4px 0",
-  },
+  list: { flex: 1, minWidth: 0, minHeight: 0, overflowY: "auto", padding: "4px 0" },
   sectionLabel: { color: C.faint, fontSize: 10, textTransform: "uppercase",
                   padding: "6px 9px 2px", letterSpacing: 0.5 },
   row: { display: "flex", gap: 5, alignItems: "center", padding: "2px 9px", lineHeight: "17px" },
@@ -334,25 +265,14 @@ const S: Record<string, React.CSSProperties> = {
     borderRadius: 3, width: 17, height: 15, lineHeight: "13px", padding: 0,
     cursor: "pointer", fontSize: 12, flexShrink: 0,
   },
-  diff: { flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" },
-  diffHeader: { display: "flex", gap: 8, alignItems: "center", padding: "5px 9px",
-                borderBottom: `1px solid ${C.line}`, color: C.dim, flexShrink: 0 },
-  openBtn: { background: "transparent", border: `1px solid ${C.line}`, color: C.dim,
-             borderRadius: 4, padding: "1px 7px", cursor: "pointer", fontSize: 11 },
-  diffBody: { flex: 1, minHeight: 0, overflow: "auto", fontFamily: 'Menlo, "SF Mono", monospace', fontSize: 11 },
-  hunkHeader: { color: C.faint, background: "#101017", padding: "3px 9px",
-                borderTop: `1px solid ${C.line}`, position: "sticky", top: 0,
-                // Sticks to the top *and* to the left edge: without a width
-                // tied to the scrolled content, scrolling right slides the
-                // header's background out and leaves the text floating.
-                left: 0, minWidth: "min-content" },
-  // `min-content` so a long source line widens the row instead of being
-  // squeezed to the container and clipped: diffBody scrolls horizontally, but
-  // only if the rows may be wider than it.
-  diffLine: {
-    display: "flex", cursor: "pointer", lineHeight: "16px", whiteSpace: "pre",
-    minWidth: "min-content",
-  },
-  gutter: { width: 44, textAlign: "right", paddingRight: 8, color: C.faint, flexShrink: 0 },
-  code: { flex: 1, overflow: "hidden", textOverflow: "ellipsis" },
 };
+
+/** The directory part of a repo-relative path, blank at the repository root. */
+function dirOf(path: string): string {
+  const cut = path.lastIndexOf("/");
+  return cut < 0 ? "" : path.slice(0, cut);
+}
+
+function baseOf(path: string): string {
+  return path.slice(path.lastIndexOf("/") + 1);
+}

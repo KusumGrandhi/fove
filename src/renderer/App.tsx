@@ -52,6 +52,11 @@ interface PaneSpec {
   openPath?: string;
   /** Line to reveal, when the request came from a diff or a stack frame. */
   openLine?: number;
+  /**
+   * For editor panes: show this file as a diff against a revision rather than
+   * as a file, which is what clicking a change in the git pane asks for.
+   */
+  openDiff?: { path: string; rev: string; revLabel?: string };
   /** Changes on every request, so reopening the same path still fires. */
   openNonce?: number;
   /** For claude panes routed at a non-default backend. */
@@ -410,7 +415,13 @@ export function App() {
        * only the shortcut is off, so re-enabling is uncommenting this line.
        */
       // else if (e.key === "l") { e.preventDefault(); openKeelRef.current(); }
-      // ⌘⇧O reaches Spotlight too, next to ⌘O's "go to a worktree".
+      /*
+       * ⌘⇧O reaches Spotlight too, next to ⌘O's "go to a worktree".
+       *
+       * Unless an editor pane has the focus: there it means "go to a symbol
+       * in this file", which is what it means in every other editor. The pane
+       * takes it in the capture phase and stops this handler seeing it.
+       */
       else if (e.key === "O" || (e.key === "o" && e.shiftKey)) { e.preventDefault(); openSpotlightRef.current(); }
       else if (e.key === "o") { e.preventDefault(); openPaletteRef.current(); }
       else if (e.key === "p" && e.shiftKey) { e.preventDefault(); togglePin(activeTabId); }
@@ -641,15 +652,19 @@ export function App() {
     [],
   );
 
-  const openInPane = useCallback(
-    (file: string, line?: number) => {
-      if (!file || !active) return;
-      // Reuse an editor pane when the tab has one -- opening a new pane per
-      // file would shred the layout during a busy turn.
+  /**
+   * Hand a request to an editor pane, splitting one off only if the tab has
+   * none -- opening a new pane per file would shred the layout during a busy
+   * turn.
+   *
+   * `openPath` and `openDiff` are both spelled out on every request, including
+   * as `undefined`, so a diff request cannot leave a stale file request behind
+   * it in the pane spec (or the other way round) and reopen the wrong thing.
+   */
+  const routeToEditor = useCallback(
+    (openAt: Pick<PaneSpec, "openPath" | "openLine" | "openDiff" | "openNonce">) => {
+      if (!active) return;
       const existing = Object.values(active.panes).find((p) => p.kind === "editor");
-      // The nonce forces a reopen when the same path is requested twice, which
-      // otherwise looks like a dead button.
-      const openAt = { openPath: file, openLine: line, openNonce: Date.now() };
       if (existing) {
         updateTab(active.id, (t) => ({
           ...t,
@@ -668,7 +683,31 @@ export function App() {
     },
     [active, updateTab],
   );
+
+  const openInPane = useCallback(
+    (file: string, line?: number) => {
+      if (!file) return;
+      // The nonce forces a reopen when the same path is requested twice, which
+      // otherwise looks like a dead button.
+      routeToEditor({ openPath: file, openLine: line, openDiff: undefined, openNonce: Date.now() });
+    },
+    [routeToEditor],
+  );
   openInPaneRef.current = openInPane;
+
+  /** Show a file's changes against a revision in the editor pane. */
+  const openDiffInPane = useCallback(
+    (file: string, rev = "HEAD", revLabel?: string) => {
+      if (!file) return;
+      routeToEditor({
+        openPath: undefined,
+        openLine: undefined,
+        openDiff: { path: file, rev, revLabel },
+        openNonce: Date.now(),
+      });
+    },
+    [routeToEditor],
+  );
 
   useEffect(() => {
     const off = window.th.onIdeOpenFile((raw) => {
@@ -1370,13 +1409,18 @@ export function App() {
                         </button>
                       </div>
                     ) : spec.kind === "git" ? (
-                      <GitStatusPane cwd={spec.cwd ?? cwdOf(active)} onOpen={openInPane} />
+                      <GitStatusPane
+                        cwd={spec.cwd ?? cwdOf(active)}
+                        onOpen={openInPane}
+                        onOpenDiff={openDiffInPane}
+                      />
                     ) : spec.kind === "editor" ? (
                       <EditorPane
                         key={spec.id}
                         cwd={spec.cwd ?? cwdOf(active)}
                         initialPath={spec.openPath}
                         initialLine={spec.openLine}
+                        initialDiff={spec.openDiff}
                         openNonce={spec.openNonce}
                         breakpoints={breakpoints}
                         onToggleBreakpoint={toggleBreakpoint}

@@ -156,6 +156,46 @@ export class GitService {
     }
   }
 
+  /**
+   * A file's contents at a revision, or null when it does not exist there.
+   *
+   * `rev` is anything git resolves -- "HEAD", a sha, a branch -- and the empty
+   * string means the index, since `git show :path` is how git spells "staged".
+   * A null is the honest answer for a file that was added since that revision,
+   * and the diff view renders it as an empty original rather than an error.
+   *
+   * The path must be repo-relative: `git show` resolves `<rev>:<path>` against
+   * the repository root, not the process's cwd.
+   */
+  async fileAt(cwd: string, rev: string, path: string): Promise<string | null> {
+    try {
+      return await git(cwd, ["show", "--textconv", `${rev}:${path}`]);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Commits that touched one file, newest first.
+   *
+   * `--follow` so a rename does not truncate the history at the rename -- which
+   * is exactly the point where you most want to keep reading.
+   */
+  async fileLog(cwd: string, path: string, limit = 100): Promise<
+    { oid: string; short: string; subject: string; author: string; when: string }[]
+  > {
+    try {
+      const out = await git(cwd, [
+        "log", `-${limit}`, "--follow",
+        "--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1e",
+        "--", path,
+      ]);
+      return parseLogRecords(out);
+    } catch {
+      return [];
+    }
+  }
+
   async log(cwd: string, limit = 50): Promise<
     { oid: string; short: string; subject: string; author: string; when: string }[]
   > {
@@ -164,16 +204,23 @@ export class GitService {
       const out = await git(cwd, [
         "log", `-${limit}`, "--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1e",
       ]);
-      return out
-        .split("\x1e")
-        .map((r) => r.replace(/^\n/, ""))
-        .filter(Boolean)
-        .map((rec) => {
-          const [oid = "", short = "", subject = "", author = "", when = ""] = rec.split("\x1f");
-          return { oid, short, subject, author, when };
-        });
+      return parseLogRecords(out);
     } catch {
       return [];
     }
   }
+}
+
+/** Split the \x1e/\x1f-delimited `log` format both log readers ask for. */
+function parseLogRecords(out: string): {
+  oid: string; short: string; subject: string; author: string; when: string;
+}[] {
+  return out
+    .split("\x1e")
+    .map((r) => r.replace(/^\n/, ""))
+    .filter(Boolean)
+    .map((rec) => {
+      const [oid = "", short = "", subject = "", author = "", when = ""] = rec.split("\x1f");
+      return { oid, short, subject, author, when };
+    });
 }
