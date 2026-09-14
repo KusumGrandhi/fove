@@ -6,7 +6,7 @@
  * What it adds is the part the CLI has no notion of: pointing a *new* pane at a
  * third-party endpoint, and being honest about what that costs.
  *
- * Three rules this UI exists to enforce:
+ * Four rules this UI exists to enforce:
  *
  *   1. Third-party routing is not supported by Anthropic. The notice is quoted
  *      verbatim rather than paraphrased, because paraphrasing a disclaimer is
@@ -19,6 +19,12 @@
  *   3. The key never comes back. The renderer learns whether one exists and
  *      where it came from, never its value -- so a key the user exported is
  *      reported but not offered for deletion, because it isn't ours to delete.
+ *   4. The shipped model list is a starting point, not the boundary. A gateway
+ *      adds models faster than this app ships, so any id can be typed in against
+ *      a provider's existing key. The field is third-party-only: the model name
+ *      travels as ANTHROPIC_MODEL, which is set for those providers and nobody
+ *      else, so offering it on the Anthropic row would be a control that does
+ *      nothing.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -58,6 +64,7 @@ export function ModelPicker(props: {
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState("");
+  const [custom, setCustom] = useState("");
 
   const refresh = useCallback(async () => {
     const r = (await window.th.providers()) as {
@@ -171,7 +178,10 @@ export function ModelPicker(props: {
 
           {providers.map((p) => (
             <div key={p.id} style={S.provider}>
-              <div style={S.providerHead} onClick={() => setOpenId(openId === p.id ? null : p.id)}>
+              <div
+                style={S.providerHead}
+                onClick={() => { setOpenId(openId === p.id ? null : p.id); setCustom(""); }}
+              >
                 <span style={{ color: p.thirdParty ? "#d29922" : "#3fb950" }}>
                   {p.thirdParty ? "▲" : "●"}
                 </span>
@@ -233,6 +243,28 @@ export function ModelPicker(props: {
                         {starFor(p, m)}
                       </span>
                     ))
+                  )}
+                  {p.thirdParty && (
+                    <div style={S.customRow}>
+                      <input
+                        value={custom}
+                        placeholder="custom model id"
+                        style={S.input}
+                        disabled={p.usable === false}
+                        onChange={(e) => setCustom(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && custom.trim()) launch(p, custom.trim());
+                        }}
+                      />
+                      <button
+                        style={{ ...S.model, opacity: p.usable === false || !custom.trim() ? 0.45 : 1 }}
+                        disabled={p.usable === false || !custom.trim()}
+                        title={p.usable === false
+                          ? `${p.authTokenEnv} is not set`
+                          : `open a pane on ${custom.trim() || "a model you type"}`}
+                        onClick={() => launch(p, custom.trim())}
+                      >open</button>
+                    </div>
                   )}
                 </div>
               )}
@@ -309,6 +341,7 @@ const S: Record<string, React.CSSProperties> = {
   models: { display: "flex", flexWrap: "wrap", gap: 5, padding: "7px 9px", background: "#0d0d11" },
   notes: { width: "100%", color: C.faint, fontSize: 10, marginBottom: 4, lineHeight: 1.5 },
   chipGroup: { display: "inline-flex", alignItems: "center", gap: 2 },
+  customRow: { display: "flex", alignItems: "center", gap: 5, width: "100%" },
   model: {
     padding: "3px 9px", borderRadius: 4, border: "1px solid #33333d",
     background: "transparent", color: C.fg, fontSize: 11, cursor: "pointer",
