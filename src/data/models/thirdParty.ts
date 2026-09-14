@@ -13,8 +13,9 @@
  * looping. Token accounting becomes unreliable, so cost display is suppressed.
  *
  * Config lives in this app's own file, never in ~/.claude/settings.json or
- * ~/.claude.json, so a bad entry cannot break the plain CLI. Tokens are read
- * from the environment by name -- never stored here as literals.
+ * ~/.claude.json, so a bad entry cannot break the plain CLI. This file holds env
+ * var NAMES, never key literals: a key is read from the environment, or from the
+ * keychain-encrypted store in main/providerKeys.ts when the environment lacks it.
  */
 
 import { homedir } from "node:os";
@@ -38,7 +39,7 @@ export interface Provider {
   id: string;
   label: string;
   baseUrl: string;
-  /** Name of the env var holding the key -- not the key itself. */
+  /** Name of the env var holding the key, and the slot it is saved under -- not the key itself. */
   authTokenEnv: string;
   models: string[];
   thirdParty: boolean;
@@ -122,12 +123,29 @@ export async function loadProviders(path = PROVIDERS_PATH): Promise<Provider[]> 
   return BUILTIN_PROVIDERS;
 }
 
-/** Resolve the key from the environment. Returns undefined when unset. */
-export function tokenFor(p: Provider): string | undefined {
-  return p.authTokenEnv ? process.env[p.authTokenEnv] : undefined;
+/** Looks up a key the app has saved, given the env var name it belongs to. */
+export type StoredKeys = (name: string) => string | undefined;
+
+/**
+ * Resolve the key by env var name, falling back to whatever the app has saved.
+ *
+ * The environment is checked first so an explicit export stays an override. The
+ * fallback exists because a Dock-launched GUI app never sees the user's shell
+ * environment; see main/providerKeys.ts for where saved keys actually live.
+ */
+export function tokenFor(p: Provider, stored?: StoredKeys): string | undefined {
+  if (!p.authTokenEnv) return undefined;
+  return process.env[p.authTokenEnv] ?? stored?.(p.authTokenEnv);
+}
+
+/** Where a resolved key came from, so the UI can offer to clear only its own. */
+export function tokenSource(p: Provider, stored?: StoredKeys): "env" | "stored" | null {
+  if (!p.authTokenEnv) return null;
+  if (process.env[p.authTokenEnv]) return "env";
+  return stored?.(p.authTokenEnv) ? "stored" : null;
 }
 
 /** Whether this provider can actually be used right now. */
-export function isUsable(p: Provider): boolean {
-  return !p.thirdParty || tokenFor(p) !== undefined;
+export function isUsable(p: Provider, stored?: StoredKeys): boolean {
+  return !p.thirdParty || tokenFor(p, stored) !== undefined;
 }

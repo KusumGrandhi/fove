@@ -123,6 +123,9 @@ const CH = {
   teamRejoin: "teams:rejoin",
   bgSessions: "sessions:background",
   providers: "models:providers",
+  providerSetKey: "models:set-key",
+  providerClearKey: "models:clear-key",
+  providerSetDefault: "models:set-default",
   agentsList: "config:agents",
   mcpList: "config:mcp",
   ideOpenFile: "ide:openFile",
@@ -379,6 +382,17 @@ const api = {
 
   /** Providers plus Anthropic's verbatim unsupported-routing notice. */
   providers: (): Promise<unknown> => ipcRenderer.invoke(CH.providers),
+
+  /** Save a provider key to the keychain-encrypted store. Keys travel in, never back out. */
+  providerSetKey: (name: string, value: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(CH.providerSetKey, name, value),
+  /** Forget a saved key. A key coming from the environment is not ours to remove. */
+  providerClearKey: (name: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(CH.providerClearKey, name),
+  /** Set the backend plain claude panes start on, or clear it by passing null. */
+  providerSetDefault: (
+    next: { providerId: string; model: string } | null,
+  ): Promise<{ ok: boolean }> => ipcRenderer.invoke(CH.providerSetDefault, next),
 
   bgSessions: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.bgSessions, cwd),
 
