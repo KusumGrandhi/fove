@@ -19,6 +19,7 @@
 
 import { execFile } from "node:child_process";
 import { extname } from "node:path";
+import { ensureToolPath } from "./loginPath.js";
 
 export interface Diagnostic {
   /** 1-based, as both ruff and Monaco count. */
@@ -81,6 +82,10 @@ export class LintService {
    */
   async check(path: string, cwd?: string): Promise<Diagnostic[]> {
     if (extname(path) !== ".py") return [];
+    // ruff is installed per machine, not per app, so it lives wherever the
+    // user's shell can find it -- which a GUI-launched app cannot until this
+    // runs. Without it the packaged app reports every Python file as clean.
+    await ensureToolPath();
     if (!(await this.has("ruff"))) return [];
     return this.ruff(path, cwd);
   }

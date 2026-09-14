@@ -52,6 +52,37 @@ export function loginPath(): Promise<string | undefined> {
 }
 
 /**
+ * Merge the login shell's PATH into *this process's own*, once.
+ *
+ * `spawnEnv()` below fixes one call site at a time, and that turned out to be
+ * the wrong shape for the problem: every service that shells out to a tool has
+ * to remember to use it, and the ones that forget fail only in the packaged
+ * app, silently, as a feature that "does nothing" rather than as an error.
+ * That is exactly how the teammate bar came to work in development and show
+ * nothing once installed -- `tmux` was not on the PATH, every swarm socket
+ * looked stale, and a pane full of running agents reported none.
+ *
+ * Fixing the process environment instead means a service spawning `tmux` or
+ * `ruff` by name simply works, the way it already does in development.
+ *
+ * Appended, never substituted -- same rule as `spawnEnv`. Whatever the process
+ * already has keeps priority, so a deliberately-set PATH still wins and this
+ * only adds places to look.
+ */
+let applied: Promise<void> | null = null;
+export function ensureToolPath(): Promise<void> {
+  applied ??= (async () => {
+    const extra = await loginPath();
+    if (!extra) return;
+    const current = process.env.PATH ?? "";
+    const seen = new Set(current.split(":").filter(Boolean));
+    const added = extra.split(":").filter((d) => d && !seen.has(d));
+    if (added.length > 0) process.env.PATH = [current, ...added].filter(Boolean).join(":");
+  })();
+  return applied;
+}
+
+/**
  * The environment to spawn a user-facing tool with.
  *
  * The login PATH is *appended*, never substituted. Whatever the process

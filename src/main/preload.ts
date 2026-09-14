@@ -21,6 +21,8 @@ const CH = {
   gitDiff: "git:diff",
   gitUntrackedDiff: "git:untracked-diff",
   gitLog: "git:log",
+  gitFileAt: "git:file-at",
+  gitFileLog: "git:file-log",
   gitRoot: "git:root",
   gitStage: "git:stage",
   gitUnstage: "git:unstage",
@@ -109,6 +111,11 @@ const CH = {
   searchMatch: "search:match",
   searchDone: "search:done",
   lintCheck: "lint:check",
+  formatRun: "format:run",
+  projectSources: "project:sources",
+  lspAvailable: "lsp:available",
+  lspRequest: "lsp:request",
+  lspNotify: "lsp:notify",
   claudeSnapshot: "claude:snapshot",
   claudeSessions: "claude:sessions",
   skillsList: "skills:list",
@@ -175,6 +182,15 @@ const api = {
     ipcRenderer.invoke(CH.gitUntrackedDiff, cwd, path),
   gitLog: (cwd: string, limit?: number): Promise<unknown[]> =>
     ipcRenderer.invoke(CH.gitLog, cwd, limit),
+  /**
+   * A repo-relative file's contents at a revision, or null when absent there.
+   * `rev` is "" for the index, "HEAD" for the last commit, or any sha.
+   */
+  gitFileAt: (cwd: string, rev: string, path: string): Promise<string | null> =>
+    ipcRenderer.invoke(CH.gitFileAt, cwd, rev, path),
+  /** Commits that touched one repo-relative path, newest first. */
+  gitFileLog: (cwd: string, path: string, limit?: number): Promise<unknown[]> =>
+    ipcRenderer.invoke(CH.gitFileLog, cwd, path, limit),
   openInEditor: (file: string, line?: number): void =>
     ipcRenderer.send(CH.openInEditor, file, line),
   revealInFinder: (file: string): void => ipcRenderer.send(CH.revealInFinder, file),
@@ -300,6 +316,36 @@ const api = {
     return () => { ipcRenderer.removeListener(CH.searchDone, h); };
   },
   /** Diagnostics for one file, for languages Monaco cannot check itself. */
+  /**
+   * The language server that serves a language on this machine, or null when
+   * none is installed -- which is the normal case and not an error.
+   */
+  lspAvailable: (language: string): Promise<string | null> =>
+    ipcRenderer.invoke(CH.lspAvailable, language),
+  /** An LSP request, or null when there is no server to ask. */
+  lspRequest: (root: string, language: string, method: string, params: unknown): Promise<unknown> =>
+    ipcRenderer.invoke(CH.lspRequest, root, language, method, params),
+  /** An LSP notification, e.g. keeping the server told about an open buffer. */
+  lspNotify: (root: string, language: string, method: string, params: unknown): void =>
+    ipcRenderer.send(CH.lspNotify, root, language, method, params),
+  /**
+   * Every TypeScript/JavaScript source in the project, plus the declarations
+   * of its direct dependencies, for the editor's language service to build a
+   * program out of. Capped -- `skipped` says how much did not fit.
+   */
+  projectSources: (root: string): Promise<{
+    files: { path: string; content: string }[];
+    skipped: number;
+    hasTsConfig: boolean;
+    tsconfig: { path: string; text: string } | null;
+  }> => ipcRenderer.invoke(CH.projectSources, root),
+  /**
+   * Format a buffer with the project's own formatter, if it has one.
+   * Resolves with `content: null` when nothing here formats that file type.
+   */
+  formatRun: (path: string, content: string, cwd?: string): Promise<{
+    content: string | null; by?: string; error?: string;
+  }> => ipcRenderer.invoke(CH.formatRun, path, content, cwd),
   lintCheck: (path: string, cwd?: string): Promise<unknown[]> =>
     ipcRenderer.invoke(CH.lintCheck, path, cwd),
 

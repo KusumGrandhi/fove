@@ -106,10 +106,17 @@ describe("diff rows", () => {
      * `whiteSpace: "pre"` inside a flex row is not enough: flex children
      * shrink to the container, so a long source line is squeezed and clipped
      * even though the scroll parent would have shown it.
+     *
+     * Only GitActions renders diff rows by hand now. The git pane's own diff
+     * moved into the editor, where Monaco owns the scrolling -- so this checks
+     * the panes that still hand-roll one rather than a fixed list, and stops
+     * quietly passing if another pane grows its own.
      */
-    for (const path of ["src/renderer/panes/GitStatus.tsx", "src/renderer/panes/GitActions.tsx"]) {
-      const block = styleBlocks(readFileSync(path, "utf8")).find((b) => b.name === "diffLine");
-      expect(block, `${path} diffLine not found`).toBeDefined();
+    const withDiffRows = sourceFiles()
+      .map(({ path, text }) => ({ path, block: styleBlocks(text).find((b) => b.name === "diffLine") }))
+      .filter((f) => f.block);
+    expect(withDiffRows.length, "no pane renders diff rows any more").toBeGreaterThan(0);
+    for (const { path, block } of withDiffRows) {
       expect(block!.body, `${path} diffLine must keep its intrinsic width`)
         .toMatch(/minWidth:\s*"min-content"/);
     }
