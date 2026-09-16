@@ -30,8 +30,13 @@ import { ensureToolPath } from "./loginPath.js";
  * pyright is the one most Python projects are already checked by, so its
  * answers match what CI says. The others are worth trying because a machine
  * that has one of them has it for exactly this purpose.
+ *
+ * Exported so the dependency spec can be held to it: the doctor offers to
+ * install the first server for a language, and a rename here that left
+ * `shared/deps.ts` behind would have it install something this file never
+ * looks for. test/deps.test.ts fails on that.
  */
-const SERVERS: Record<string, { bin: string; args: string[] }[]> = {
+export const SERVERS: Record<string, { bin: string; args: string[] }[]> = {
   python: [
     { bin: "pyright-langserver", args: ["--stdio"] },
     { bin: "basedpyright-langserver", args: ["--stdio"] },
@@ -224,7 +229,14 @@ export class LspService {
 
     for (const candidate of SERVERS[language] ?? []) {
       const ok = await new Promise<boolean>((resolve) => {
-        execFile(candidate.bin, ["--version"], { timeout: 5000 }, (err) => resolve(!err));
+        execFile(candidate.bin, ["--version"], { timeout: 5000 }, (err) => {
+          if (!err) return resolve(true);
+          // A server that ran and objected to --version is still installed:
+          // pyright-langserver exits 1 on it, wanting a transport flag. Only a
+          // failed spawn (err.code is a string, "ENOENT") or a timeout kill
+          // (err.code null, signal set) means there is no working binary.
+          resolve(typeof err.code === "number");
+        });
       });
       if (ok) {
         this.resolved.set(language, candidate);
