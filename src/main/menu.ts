@@ -15,8 +15,29 @@
 
 import { app, BrowserWindow, Menu, dialog, shell, clipboard } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
-import { check, install } from "./doctor.js";
+import { check, install, pythonEnvs } from "./doctor.js";
 import { DEPS, report, summary, installCommand } from "../shared/deps.js";
+import { loadState } from "./store.js";
+
+/**
+ * The projects this person has open, from the layout the app already saves.
+ *
+ * The setup sheet is a main-process dialog with no renderer to ask, and the
+ * saved layout is the only record of what someone actually works on -- which
+ * is what makes a per-project check possible here at all.
+ */
+function projectRoots(): string[] {
+  const saved = loadState<{ tabs?: { cwd?: string }[] } | null>(null);
+  return (saved?.tabs ?? []).map((t) => t.cwd).filter((c): c is string => !!c);
+}
+
+/**
+ * Told to whoever caches "this machine has no language server for X".
+ *
+ * The menu is built once and lives for the process, so the hook is a module
+ * variable rather than threaded through every function that might need it.
+ */
+let forgetProbes: () => void = () => {};
 
 /**
  * Run the check and show the result as a native dialog.
@@ -26,7 +47,10 @@ import { DEPS, report, summary, installCommand } from "../shared/deps.js";
  * become a place people keep open.
  */
 async function showSetupCheck(parent: BrowserWindow | null): Promise<void> {
-  const reports = report(await check());
+  const [reports, envs] = await Promise.all([
+    check().then(report),
+    pythonEnvs(projectRoots()),
+  ]);
   const missing = reports.filter((r) => !r.found);
 
   const lines = reports.map((r) => {
@@ -36,6 +60,30 @@ async function showSetupCheck(parent: BrowserWindow | null): Promise<void> {
       : r.dep.needs;
     return `${mark}  ${r.dep.label} — ${detail}`;
   });
+
+  /*
+   * Which Python each project resolves to.
+   *
+   * "Pyright ✓" was true on a machine where Python go-to-definition did
+   * nothing for any third-party import, because the server was running with no
+   * environment at all. A check that reports the tool but not the thing the
+   * tool needs is how a setup sheet lies while every row is accurate.
+   */
+  if (envs.length > 0) {
+    lines.push("");
+    for (const e of envs) {
+      const name = e.root.split("/").pop() || e.root;
+      if (!e.path) {
+        lines.push(`!  Python · ${name} — none found; only stdlib and this project's own code will resolve`);
+        continue;
+      }
+      const where = e.path.includes("/envs/")
+        ? `conda: ${e.path.split("/envs/")[1]!.split("/")[0]}`
+        : e.path;
+      lines.push(`✓  Python · ${name} — ${where}${e.version ? ` (${e.version})` : ""}${e.chosen ? "" : ", detected"}`);
+    }
+    lines.push("Wrong one? Pick it in a Debugger pane; the choice is kept per project.");
+  }
 
   // Only offer to install what brew can actually install.
   const installable = missing.filter((r) => installCommand(r.dep));
@@ -85,14 +133,40 @@ async function showSetupCheck(parent: BrowserWindow | null): Promise<void> {
  * dialog should say what is true now.
  */
 async function runInstalls(parent: BrowserWindow | null, bins: string[]): Promise<void> {
+  /*
+   * Say that something is happening.
+   *
+   * `brew install` takes tens of seconds at best and minutes at worst, and
+   * until this the app showed *nothing at all* for the whole of it -- the
+   * dialog closed, and then fove sat there. Clicking Install and watching
+   * nothing happen is indistinguishable from a button that does not work,
+   * which is exactly how it was reported.
+   *
+   * An indeterminate dock progress bar is the honest signal: it says "still
+   * going" without claiming to know how far along it is.
+   */
+  parent?.setProgressBar(2);
+
   const failures: string[] = [];
-  for (const bin of bins) {
-    const r = await install(bin);
-    if (!r.ok) failures.push(`${bin}: ${r.output.split("\n").slice(-3).join(" ")}`);
+  try {
+    for (const bin of bins) {
+      const r = await install(bin);
+      if (!r.ok) failures.push(`${bin}\n${r.output}`);
+    }
+  } finally {
+    parent?.setProgressBar(-1);
   }
 
   const after = report(await check());
+  const installed = after.filter((r) => bins.includes(r.dep.bin) && r.found);
   const stillMissing = after.filter((r) => bins.includes(r.dep.bin) && !r.found);
+
+  // A language server the editor already gave up looking for this session.
+  // Without this the app would install pyright for you and then keep behaving
+  // exactly as if you had none.
+  if (installed.length > 0) forgetProbes();
+
+  const needsRestart = installed.some((r) => r.dep.bin.includes("langserver") || r.dep.bin.includes("language-server"));
 
   const opts = {
     type: stillMissing.length === 0 ? ("info" as const) : ("error" as const),
@@ -100,7 +174,14 @@ async function runInstalls(parent: BrowserWindow | null, bins: string[]): Promis
     message: stillMissing.length === 0
       ? "Installed."
       : `Still missing: ${stillMissing.map((r) => r.dep.label).join(", ")}`,
-    detail: failures.length > 0 ? failures.join("\n\n") : undefined,
+    detail: [
+      failures.length > 0 ? failures.join("\n\n") : "",
+      // Editors already open asked for a language server once and were told
+      // there was none; they do not ask again.
+      needsRestart && stillMissing.length === 0
+        ? "Reopen the file, or restart fove, for editors already open to use it."
+        : "",
+    ].filter(Boolean).join("\n\n") || undefined,
     buttons: ["OK"],
     noLink: true,
   };
@@ -108,8 +189,18 @@ async function runInstalls(parent: BrowserWindow | null, bins: string[]): Promis
   else await dialog.showMessageBox(opts);
 }
 
-/** Build and install the application menu. */
-export function installMenu(getWindow: () => BrowserWindow | null): void {
+/**
+ * Build and install the application menu.
+ *
+ * `onDepsInstalled` is called after the Setup Check sheet actually puts a tool
+ * on the machine, so anything that concluded the tool was absent can stop
+ * believing that.
+ */
+export function installMenu(
+  getWindow: () => BrowserWindow | null,
+  onDepsInstalled: () => void = () => {},
+): void {
+  forgetProbes = onDepsInstalled;
   const isMac = process.platform === "darwin";
 
   const template: MenuItemConstructorOptions[] = [
