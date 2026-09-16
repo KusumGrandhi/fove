@@ -23,6 +23,7 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { ensureToolPath } from "./loginPath.js";
+import { interpreterFor } from "./interpreters.js";
 
 /**
  * Servers to try, best first.
@@ -76,6 +77,11 @@ class Server {
     bin: string,
     args: string[],
     private readonly root: string,
+    /**
+     * The interpreter this project's dependencies are installed in, when one
+     * was found. Null means "we could not tell", which is the old behaviour.
+     */
+    private readonly pythonPath: string | null = null,
   ) {
     this.child = spawn(bin, args, {
       cwd: root,
@@ -129,13 +135,38 @@ class Server {
     }
   }
 
+  /**
+   * What to answer when the *server* asks the client something.
+   *
+   * Only `workspace/configuration` gets a real answer, and only to say which
+   * Python this project uses. Everything else stays null, which is what a
+   * client with no settings says and is perfectly valid.
+   *
+   * Answering null to `workspace/configuration` was not, though. It is how
+   * pyright asks "which interpreter?", and a client that shrugs leaves it with
+   * no site-packages at all: stdlib resolves through typeshed and first-party
+   * code resolves through the workspace, but every third-party import answers
+   * nothing. `from flask import make_response` went nowhere while a local
+   * variable on the same line went straight there -- which presents as
+   * "go-to-definition works on variables but not on functions" and sends you
+   * looking in entirely the wrong place.
+   */
+  private answer(method: string, params: unknown): unknown {
+    if (method !== "workspace/configuration") return null;
+    const items = (params as { items?: { section?: string }[] } | undefined)?.items ?? [{}];
+    // One entry per item asked for, in order -- the protocol is positional.
+    return items.map((item) =>
+      item.section === "python" && this.pythonPath ? { pythonPath: this.pythonPath } : {},
+    );
+  }
+
   private dispatch(msg: {
-    id?: number; method?: string; result?: unknown; error?: { message?: string };
+    id?: number; method?: string; params?: unknown;
+    result?: unknown; error?: { message?: string };
   }): void {
     // A request *from* the server (workspace/configuration and friends).
-    // Answering null is valid and is what a client with no settings says.
     if (msg.method && msg.id !== undefined) {
-      this.write({ jsonrpc: "2.0", id: msg.id, result: null });
+      this.write({ jsonrpc: "2.0", id: msg.id, result: this.answer(msg.method, msg.params) });
       return;
     }
     if (msg.id === undefined) return; // a notification; nothing here wants them
@@ -208,10 +239,26 @@ class Server {
 }
 
 export class LspService {
-  /** One server per root and language. */
-  private readonly servers = new Map<string, Server>();
+  /**
+   * One server per root and language.
+   *
+   * The *promise* is stored rather than the server, and it is stored before
+   * the first `await` -- so a second caller arriving while the first is still
+   * starting waits for that same process instead of spawning a rival.
+   *
+   * That race was not theoretical. The editor opens a buffer and asks about it
+   * in the same breath: `didOpen` goes over one IPC channel and the definition
+   * request over another, and both reached a `serverFor` that only recorded a
+   * server two awaits later. Two pyrights started, `didOpen` reached the one
+   * that lost the map and every request reached the one that had never heard
+   * of the file -- so Cmd-click in Python answered null, silently, forever
+   * (the renderer only re-sends `didOpen` for a buffer it has not synced).
+   */
+  private readonly servers = new Map<string, Promise<Server | null>>();
   /** Which binary serves a language here, or null when none does. */
   private readonly resolved = new Map<string, { bin: string; args: string[] } | null>();
+  /** Probes still running, so concurrent callers share one rather than race. */
+  private readonly probing = new Map<string, Promise<string | null>>();
 
   /**
    * The server that would serve this language, or null if none is installed.
@@ -219,10 +266,20 @@ export class LspService {
    * Probed once. Installing a language server mid-session and expecting the
    * editor to notice is not a case worth paying a subprocess-per-check for.
    */
-  async available(language: string): Promise<string | null> {
+  available(language: string): Promise<string | null> {
     const known = this.resolved.get(language);
-    if (known !== undefined) return known?.bin ?? null;
+    if (known !== undefined) return Promise.resolve(known?.bin ?? null);
 
+    const inFlight = this.probing.get(language);
+    if (inFlight) return inFlight;
+
+    const probe = this.probe(language);
+    this.probing.set(language, probe);
+    void probe.finally(() => this.probing.delete(language));
+    return probe;
+  }
+
+  private async probe(language: string): Promise<string | null> {
     // A language server is installed per machine. Probing before the login
     // PATH is in place would conclude, permanently, that there is none.
     await ensureToolPath();
@@ -247,23 +304,50 @@ export class LspService {
     return null;
   }
 
-  private async serverFor(root: string, language: string): Promise<Server | null> {
-    const key = `${language} ${root}`;
+  /**
+   * The running server for a root, starting one if this is the first ask.
+   *
+   * Not `async`: the promise has to land in the map *before* control ever
+   * leaves this function, or a caller arriving a tick later still sees an
+   * empty map and starts a second server. The synchronous `set` below is
+   * load-bearing rather than stylistic.
+   */
+  private serverFor(root: string, language: string): Promise<Server | null> {
+    const key = `${language} ${root}`;
     const running = this.servers.get(key);
     if (running) return running;
 
+    const starting = this.start(root, language);
+    this.servers.set(key, starting);
+    // A server that never started is a server we do not have. Forget it so a
+    // later request can try again rather than reusing a dead process -- but
+    // only once it has settled, so everyone already queued behind this attempt
+    // gets the same answer.
+    void starting.then(
+      (s) => { if (!s) this.servers.delete(key); },
+      () => { this.servers.delete(key); },
+    );
+    return starting;
+  }
+
+  /** Spawn a server and wait for `initialize`. Null if it never gets there. */
+  private async start(root: string, language: string): Promise<Server | null> {
     if (!(await this.available(language))) return null;
     const spec = this.resolved.get(language);
     if (!spec) return null;
 
-    const server = new Server(spec.bin, spec.args, root);
-    this.servers.set(key, server);
+    /*
+     * Resolved before the server starts, not after.
+     *
+     * pyright asks for configuration during initialisation, and an answer that
+     * arrives later is an answer it has already given up on -- it will have
+     * analysed the project against no environment by then.
+     */
+    const pythonPath = language === "python" ? await interpreterFor(root) : null;
+    const server = new Server(spec.bin, spec.args, root, pythonPath);
     try {
       await server.ready;
     } catch {
-      // A server that cannot start is a server we do not have. Forget it so a
-      // later request can try again rather than reusing a dead process.
-      this.servers.delete(key);
       server.stop();
       return null;
     }
@@ -297,9 +381,31 @@ export class LspService {
     server?.notify(method, params);
   }
 
-  /** Stop every server, on quit. */
+  /**
+   * Forget what was probed, so a server installed since is found.
+   *
+   * The probe is deliberately once-per-session -- but the Setup Check sheet
+   * can *install* a language server while the app is running, and a cache that
+   * still says "there is no pyright" would make its own install look like it
+   * did nothing. Whoever installs one says so here.
+   *
+   * Servers already running are left alone: they are serving a language that
+   * was found, which this does not change.
+   */
+  forget(language?: string): void {
+    if (language === undefined) this.resolved.clear();
+    else this.resolved.delete(language);
+  }
+
+  /**
+   * Stop every server, on quit.
+   *
+   * The map holds promises, so one still starting is stopped when it lands
+   * rather than skipped -- a pyright spawned a moment before quit must not
+   * outlive the app.
+   */
   stopAll(): void {
-    for (const s of this.servers.values()) s.stop();
+    for (const p of this.servers.values()) void p.then((s) => s?.stop(), () => {});
     this.servers.clear();
   }
 }

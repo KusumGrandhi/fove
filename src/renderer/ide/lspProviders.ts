@@ -31,8 +31,35 @@ interface LspWorkspaceEdit { changes?: Record<string, { range: LspRange; newText
 /** Languages already wired, so a second editor pane does not double them up. */
 const registered = new Set<string>();
 
-/** Models the server has been told about, and the version it last heard. */
+/**
+ * Which workspace each open file belongs to.
+ *
+ * Monaco's provider registry is global -- one definition provider per language
+ * for the whole page -- but fove's tabs are workspaces, several repositories
+ * open at once in a single renderer. So the provider cannot close over "the"
+ * root, and it must not have to guess one either.
+ *
+ * It does not have to: the pane that opened the file already knows, because
+ * that is its own working directory. It says so here, and the provider looks
+ * the answer up. No path matching, no heuristics -- the repository a file came
+ * from is a fact the app has, not one to be inferred from the path.
+ */
+const rootOfPath = new Map<string, string>();
+
+/** The pane telling us which repository a file it just opened belongs to. */
+export function noteRoot(path: string, root: string): void {
+  rootOfPath.set(path, root);
+}
+
+/**
+ * Buffers a server has been told about, and the version it last heard.
+ *
+ * Keyed by root as well as URI: the same file reached through two workspaces
+ * is two servers, and one of them not having been told is the whole bug this
+ * is here to avoid.
+ */
 const synced = new Map<string, number>();
+const syncKey = (root: string, uri: string): string => `${root}\n${uri}`;
 
 const toLspPosition = (p: monaco.IPosition): LspPosition => ({
   // Monaco counts lines and columns from 1; LSP counts from 0.
@@ -82,22 +109,31 @@ async function sync(
   const path = model.uri.path;
   const uri = pathToUri(path);
   const version = model.getVersionId();
-  const known = synced.get(uri);
+  const known = synced.get(syncKey(root, uri));
 
+  /*
+   * Awaited, not fired and forgotten. The request that follows is about this
+   * buffer, and a server that has not been told about it yet answers null --
+   * which looks exactly like "no definition here" and is why Cmd-click can
+   * appear to do nothing at all.
+   *
+   * `synced` is only updated once the notification has landed, so a failed
+   * one is re-sent next time rather than remembered as done.
+   */
   if (known === undefined) {
-    window.th.lspNotify(root, language, "textDocument/didOpen", {
+    await window.th.lspNotify(root, language, "textDocument/didOpen", {
       textDocument: { uri, languageId: language, version, text: model.getValue() },
     });
   } else if (known !== version) {
     // Full-text sync. Incremental sync would mean tracking and translating
     // every edit; the whole-buffer form is what every server must accept and
     // the files involved are source files, not databases.
-    window.th.lspNotify(root, language, "textDocument/didChange", {
+    await window.th.lspNotify(root, language, "textDocument/didChange", {
       textDocument: { uri, version },
       contentChanges: [{ text: model.getValue() }],
     });
   }
-  synced.set(uri, version);
+  synced.set(syncKey(root, uri), version);
   return uri;
 }
 
@@ -144,12 +180,21 @@ export async function registerLspProviders(
   root: string,
   language: string,
 ): Promise<string | null> {
-  if (registered.has(language)) return null;
   const server = await window.th.lspAvailable(language);
   if (!server) return null;
-  // Claim it only once the server is known to exist, so a machine that
-  // installs one later is not locked out by a failed first attempt.
-  if (registered.has(language)) return null;
+
+  /*
+   * Report the server every time, not only the first.
+   *
+   * This used to return null once a language was wired, which collapsed three
+   * different outcomes -- "no server on this machine", "already wired", and
+   * "wired just now" -- into one silent answer. Combined with the caller's own
+   * race (the effect re-runs the moment `gitRoot` resolves, cancelling the
+   * first run's notice) the result was a feature that never said anything at
+   * all, whether it worked or not. Saying which server is serving costs one
+   * toast and is the difference between "it is on" and four rounds of guessing.
+   */
+  if (registered.has(language)) return server;
   registered.add(language);
 
   const ask = async (
@@ -158,8 +203,10 @@ export async function registerLspProviders(
     position: monaco.IPosition,
     extra: Record<string, unknown> = {},
   ): Promise<unknown> => {
-    const uri = await sync(root, language, model);
-    return window.th.lspRequest(root, language, method, {
+    // The pane that opened this file said which repository it came from.
+    const where = rootOfPath.get(model.uri.path) ?? root;
+    const uri = await sync(where, language, model);
+    return window.th.lspRequest(where, language, method, {
       textDocument: { uri },
       position: toLspPosition(position),
       ...extra,
@@ -222,8 +269,11 @@ export async function registerLspProviders(
 /** Forget a buffer the server was told about, when its tab closes. */
 export function closeDocument(root: string, language: string, path: string): void {
   const uri = pathToUri(path);
-  if (!synced.delete(uri)) return;
-  window.th.lspNotify(root, language, "textDocument/didClose", {
+  const where = rootOfPath.get(path) ?? root;
+  rootOfPath.delete(path);
+  if (!synced.delete(syncKey(where, uri))) return;
+  // Nothing waits on a close, so this one really is fire-and-forget.
+  void window.th.lspNotify(where, language, "textDocument/didClose", {
     textDocument: { uri },
   });
 }

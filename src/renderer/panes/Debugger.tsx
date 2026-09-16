@@ -52,8 +52,14 @@ export function DebuggerPane(props: {
       setConfigs(c);
       setInterpreters(i);
       if (c[0]) setConfigName(c[0].name);
-      // Prefer an interpreter that can actually run the debugger.
-      setPython((i.find((x) => x.hasDebugpy) ?? i[0])?.path ?? "");
+      /*
+       * A remembered choice wins; otherwise prefer one that can actually run
+       * the debugger. `findInterpreters` puts a chosen interpreter first, so
+       * `i[0]` is that choice when there is one -- and overriding it with a
+       * debugpy guess would quietly undo what the user picked.
+       */
+      const remembered = i[0]?.label === "chosen for this project" ? i[0] : null;
+      setPython((remembered ?? i.find((x) => x.hasDebugpy) ?? i[0])?.path ?? "");
     })();
   }, [props.cwd]);
 
@@ -129,7 +135,18 @@ export function DebuggerPane(props: {
           {configs.length === 0 && <option value="">no launch.json</option>}
           {configs.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
         </select>
-        <select value={python} onChange={(e) => setPython(e.target.value)}
+        {/*
+          * Choosing here is choosing for the project, not for this run.
+          *
+          * The language server needs the same answer -- it is what lets
+          * go-to-definition follow a third-party import instead of silently
+          * resolving to nothing -- so the choice is remembered and shared
+          * rather than living and dying with this pane.
+          */}
+        <select value={python} onChange={(e) => {
+          setPython(e.target.value);
+          void window.th.dbgChooseInterpreter(props.cwd, e.target.value || null);
+        }}
           style={S.select} disabled={running || paused}>
           {interpreters.map((i) => (
             <option key={i.path} value={i.path}>

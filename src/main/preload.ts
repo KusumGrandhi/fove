@@ -96,6 +96,7 @@ const CH = {
   dbgVariables: "dbg:variables",
   dbgEvaluate: "dbg:evaluate",
   dbgInterpreters: "dbg:interpreters",
+  dbgChooseInterpreter: "dbg:choose-interpreter",
   dbgStatus: "dbg:status",
   dbgOutput: "dbg:output",
   wtList: "wt:list",
@@ -243,6 +244,12 @@ const api = {
   },
   dbgConfigs: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.dbgConfigs, cwd),
   dbgInterpreters: (cwd: string): Promise<unknown[]> => ipcRenderer.invoke(CH.dbgInterpreters, cwd),
+  /**
+   * Remember the interpreter this project uses, for everything that needs a
+   * Python -- the debugger that runs it and the language server that reads it.
+   */
+  dbgChooseInterpreter: (cwd: string, interpreter: string | null): Promise<void> =>
+    ipcRenderer.invoke(CH.dbgChooseInterpreter, cwd, interpreter),
   dbgStart: (opts: unknown): Promise<unknown> => ipcRenderer.invoke(CH.dbgStart, opts),
   dbgStop: (): Promise<void> => ipcRenderer.invoke(CH.dbgStop),
   dbgBreakpoints: (path: string, lines: number[]): Promise<void> =>
@@ -325,9 +332,14 @@ const api = {
   /** An LSP request, or null when there is no server to ask. */
   lspRequest: (root: string, language: string, method: string, params: unknown): Promise<unknown> =>
     ipcRenderer.invoke(CH.lspRequest, root, language, method, params),
-  /** An LSP notification, e.g. keeping the server told about an open buffer. */
-  lspNotify: (root: string, language: string, method: string, params: unknown): void =>
-    ipcRenderer.send(CH.lspNotify, root, language, method, params),
+  /**
+   * An LSP notification, e.g. keeping the server told about an open buffer.
+   *
+   * Awaitable even though a notification expects no reply: the caller needs to
+   * know the server has the buffer before it asks anything about it.
+   */
+  lspNotify: (root: string, language: string, method: string, params: unknown): Promise<void> =>
+    ipcRenderer.invoke(CH.lspNotify, root, language, method, params),
   /**
    * Every TypeScript/JavaScript source in the project, plus the declarations
    * of its direct dependencies, for the editor's language service to build a

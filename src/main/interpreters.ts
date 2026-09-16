@@ -21,6 +21,7 @@ import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { chosenInterpreter } from "./pythonEnv.js";
 
 const run = promisify(execFile);
 
@@ -52,6 +53,10 @@ export async function findInterpreters(cwd: string): Promise<Interpreter[]> {
     found.push({ path, label });
   };
 
+  // First, so the picker opens on it and `?? found[0]` fallbacks land on it.
+  const chosen = chosenInterpreter(cwd);
+  if (chosen && (await exists(chosen))) add(chosen, "chosen for this project");
+
   for (const dir of LOCAL_ENVS) {
     const path = join(cwd, dir, "bin", "python");
     if (await exists(path)) add(path, `${dir}`);
@@ -68,6 +73,38 @@ export async function findInterpreters(cwd: string): Promise<Interpreter[]> {
 
   // Probing runs the interpreter twice; do them together rather than serially.
   return Promise.all(found.map(async (i) => ({ ...i, ...(await probe(i.path)) })));
+}
+
+/**
+ * The one interpreter to tell a language server about.
+ *
+ * A language server that does not know the project's interpreter cannot see
+ * its site-packages, so every third-party import is unresolved: `from flask
+ * import make_response` answers nothing while a local variable on the next
+ * line answers fine. That reads as "go-to-definition works on variables but
+ * not on functions", which is a baffling way to discover you have a
+ * configuration problem.
+ *
+ * Same order of preference as `findInterpreters`, but without probing each
+ * candidate -- debugpy and version are the debugger's questions, not this one,
+ * and starting four interpreters to open a `.py` file is not a trade worth
+ * making.
+ */
+export async function interpreterFor(cwd: string): Promise<string | null> {
+  // A choice the user made beats anything inferred. Nothing on disk can say
+  // "this project uses conda", so detection is a guess and a guess must not
+  // override an answer.
+  const chosen = chosenInterpreter(cwd);
+  if (chosen) return chosen;
+
+  for (const dir of LOCAL_ENVS) {
+    const path = join(cwd, dir, "bin", "python");
+    if (await exists(path)) return path;
+  }
+  // Named environments come first out of `condaEnvs`, base last.
+  const [conda] = await condaEnvs();
+  if (conda) return conda.path;
+  return (await which("python3")) ?? (await which("python"));
 }
 
 /**

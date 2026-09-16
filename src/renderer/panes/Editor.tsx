@@ -37,7 +37,7 @@ import {
   claimNavigation, ensureEditorOpener, loadProject, modelFor, releaseModel,
   releaseNavigation, renameModel, type ProjectStatus,
 } from "../ide/tsProject.js";
-import { closeDocument, registerLspProviders } from "../ide/lspProviders.js";
+import { closeDocument, noteRoot, registerLspProviders } from "../ide/lspProviders.js";
 
 /** A file the pane has open: its metadata. The text lives in a Monaco model. */
 interface Doc {
@@ -886,16 +886,29 @@ export function EditorPane(props: {
   useEffect(() => {
     const where = root ?? props.cwd;
     const language = activeDoc?.language;
-    if (!where || !language) return;
-    let live = true;
+    const path = activeDoc?.path;
+    if (!where || !language || !path) return;
+
+    // This pane's own working directory is the answer to "which repository is
+    // this file in" -- the provider should never have to infer it from a path.
+    noteRoot(path, where);
+
+    /*
+     * No `live` guard on the notice.
+     *
+     * There was one, and it was why this never said anything: the effect runs
+     * first with the pane's cwd, then again the moment `gitRoot` resolves, and
+     * the cleanup from that first run cancelled the notice it was about to
+     * show. The second run then found the language already wired and said
+     * nothing either. Registration is idempotent and the notice is about the
+     * machine rather than about this render, so neither needs cancelling.
+     */
     void registerLspProviders(where, language).then((server) => {
-      if (live && server) {
-        setNotice(`${language}: ${server}`);
-        setTimeout(() => setNotice(null), 2200);
-      }
+      if (!server) return;
+      setNotice(`${language}: ${server}`);
+      setTimeout(() => setNotice(null), 2200);
     });
-    return () => { live = false; };
-  }, [root, props.cwd, activeDoc?.language]);
+  }, [root, props.cwd, activeDoc?.language, activeDoc?.path]);
 
   /**
    * Go-to-definition lands here.
