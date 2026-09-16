@@ -72,6 +72,10 @@ export function AgentsPane(props: {
   claudePaneId?: string;
   /** Open a file in fove's own editor pane. */
   onOpen?: (path: string, line?: number) => void;
+  /** Pick a background session back up in a claude pane. */
+  onResume?: (sessionId: string) => void;
+  /** Bring an existing pane to the front. */
+  onFocusPane?: (paneId: string) => void;
 }) {
   const snap = useSnapshot(props.cwd, 2000, props.claudePaneId);
   const bg = useBackgroundSessions(props.cwd);
@@ -120,8 +124,21 @@ export function AgentsPane(props: {
               <div
                 key={b.sessionId}
                 style={{ ...S.row, opacity: b.state === "idle" ? 0.55 : 1 }}
-                title={`${b.path}\nclick to open the transcript`}
-                onClick={() => props.onOpen?.(b.path)}
+                title={
+                  b.isCurrent
+                    ? `${b.path}\nthis session is already open — click to focus its pane`
+                    : `${b.path}\nclick to resume this session`
+                }
+                /*
+                 * A session already running in this workspace is focused
+                 * rather than resumed: `claude --resume` on a live session is
+                 * a second client on one conversation, which is not what
+                 * clicking the row that says "this pane" can possibly mean.
+                 */
+                onClick={() => {
+                  if (b.isCurrent) props.onFocusPane?.(props.claudePaneId ?? "");
+                  else props.onResume?.(b.sessionId);
+                }}
               >
                 <span style={{ color: STATE_COLOR[b.state] }}>●</span>
                 <span style={{ color: C.fg, flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -129,6 +146,15 @@ export function AgentsPane(props: {
                 </span>
                 {b.isCurrent && <span style={S.here}>this pane</span>}
                 <span style={{ color: C.faint }}>{b.state}</span>
+                {/* The transcript is still one click away, just no longer the
+                    only thing a click can mean. */}
+                <button
+                  style={S.glyph}
+                  title="open the transcript"
+                  onClick={(e) => { e.stopPropagation(); props.onOpen?.(b.path); }}
+                >
+                  ≡
+                </button>
               </div>
             ))}
           </div>
@@ -285,6 +311,9 @@ const S: Record<string, React.CSSProperties> = {
            color: "#0d0d11", fontSize: 10, fontWeight: 600 },
   here: { padding: "0 5px", borderRadius: 3, background: "#1c2333",
           color: "#58a6ff", fontSize: 10 },
+  /** One symbol, never a word: a row this narrow has no room for a label. */
+  glyph: { border: "none", background: "transparent", color: C.faint,
+           cursor: "pointer", padding: "0 2px", fontSize: 13, lineHeight: "19px" },
   pane: { display: "flex", flexDirection: "column", height: "100%", background: "#0d0d11",
           color: C.fg, fontFamily: "system-ui", fontSize: 12, overflow: "hidden" },
   bar: { display: "flex", alignItems: "center", gap: 4, padding: "4px 8px",

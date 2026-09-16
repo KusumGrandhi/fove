@@ -62,6 +62,13 @@ interface PaneSpec {
   /** For claude panes routed at a non-default backend. */
   providerEnv?: Record<string, string>;
   providerLabel?: string;
+  /**
+   * For claude panes: the session id to pick up rather than starting fresh.
+   *
+   * Persisted with the pane, so a restored layout rejoins the conversation it
+   * was in instead of silently opening a new one under the same heading.
+   */
+  resume?: string;
 }
 
 /**
@@ -611,6 +618,47 @@ export function App() {
         providerEnv: providerEnvFor(p, model),
         providerLabel: providerLabelFor(p, model),
       };
+      updateTab(active.id, (t) => ({
+        ...t,
+        tree: split(t.tree, t.focusedPaneId, pane.id, "row"),
+        panes: { ...t.panes, [pane.id]: pane },
+        focusedPaneId: pane.id,
+      }));
+    },
+    [active, updateTab],
+  );
+
+  /** Bring an existing pane to the front, without disturbing the layout. */
+  const focusPane = useCallback(
+    (paneId: string) => {
+      if (!active) return;
+      updateTab(active.id, (t) => (t.panes[paneId] ? { ...t, focusedPaneId: paneId } : t));
+    },
+    [active, updateTab],
+  );
+
+  /**
+   * Pick a background session back up, in a pane.
+   *
+   * The sessions list knew the id and could only hand it to you: open a
+   * terminal, copy the id, type `claude --resume <id>`. Everything needed to
+   * do that was already here -- a claude pane is a `claude` process and the
+   * spawn takes arguments -- so the list may as well start it.
+   *
+   * Clicking the same session twice focuses the pane already on it rather than
+   * stacking a second one, which would be two clients on one conversation.
+   */
+  const resumeSession = useCallback(
+    (sessionId: string) => {
+      if (!active) return;
+
+      const already = Object.values(active.panes).find((p) => p.resume === sessionId);
+      if (already) {
+        updateTab(active.id, (t) => ({ ...t, focusedPaneId: already.id }));
+        return;
+      }
+
+      const pane: PaneSpec = { ...makePane("claude", active.cwd), resume: sessionId };
       updateTab(active.id, (t) => ({
         ...t,
         tree: split(t.tree, t.focusedPaneId, pane.id, "row"),
@@ -1479,6 +1527,8 @@ export function App() {
                          */
                         claudePaneId={railPaneId}
                         onOpen={openInPane}
+                        onResume={resumeSession}
+                        onFocusPane={focusPane}
                       />
                     ) : spec.kind === "config" ? (
                       <ConfigPane cwd={spec.cwd ?? cwdOf(active)} onOpen={openInPane} />
@@ -1501,7 +1551,8 @@ export function App() {
                         focused={focused}
                         cwd={spec.cwd}
                         cmd={spec.kind === "claude" ? "claude" : undefined}
-                        args={spec.kind === "claude" ? [] : undefined}
+                        // `--resume <id>` rejoins a session; no flag starts one.
+                        args={spec.kind === "claude" ? (spec.resume ? ["--resume", spec.resume] : []) : undefined}
                         env={spec.providerEnv ?? (spec.kind === "claude" ? defaultBackend?.env : undefined)}
                       />
                     )}
