@@ -101,6 +101,7 @@ export const CH = {
   dbgVariables: "dbg:variables",
   dbgEvaluate: "dbg:evaluate",
   dbgInterpreters: "dbg:interpreters",
+  dbgChooseInterpreter: "dbg:choose-interpreter",
   dbgStatus: "dbg:status",
   dbgOutput: "dbg:output",
   wtList: "wt:list",

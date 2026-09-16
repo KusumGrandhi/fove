@@ -40,6 +40,7 @@ import { WorktreeService } from "./worktrees.js";
 import { BrowserService, type Bounds } from "./browser.js";
 import { DebugSession } from "./debug.js";
 import { findInterpreters } from "./interpreters.js";
+import { chooseInterpreter } from "./pythonEnv.js";
 import { parseLaunchConfigs, pythonConfigs } from "../shared/launch-config.js";
 import { FileService } from "./files.js";
 import { ClaudeSessionService, toWire } from "./claudeSession.js";
@@ -100,7 +101,9 @@ function createWindow(): void {
   // The menu is global rather than per-window, so it is installed once here
   // and reads the current window lazily -- a menu built against a window that
   // has since closed would parent its dialogs to nothing.
-  installMenu(() => win);
+  // A language server installed from the Setup Check sheet should be usable
+  // without quitting the app that just installed it.
+  installMenu(() => win, () => lsp.forget());
 
   win = new BrowserWindow({
     width: 1440,
@@ -411,8 +414,16 @@ ipcMain.handle(CH.projectSources, (_e, root: string) => project.sources(root));
 ipcMain.handle(CH.lspAvailable, (_e, language: string) => lsp.available(language));
 ipcMain.handle(CH.lspRequest, (_e, root: string, language: string, method: string, params: unknown) =>
   lsp.request(root, language, method, params));
-ipcMain.on(CH.lspNotify, (_e, root: string, language: string, method: string, params: unknown) =>
-  void lsp.notify(root, language, method, params));
+/*
+ * `handle` rather than `on`, so the renderer can wait for it.
+ *
+ * A notification is fire-and-forget on the wire, but the editor has to know
+ * the server has *heard* about a buffer before it asks a question about it --
+ * a `didOpen` still in flight and a definition request already sent is how
+ * Cmd-click ends up asking about a file the server does not have open.
+ */
+ipcMain.handle(CH.lspNotify, (_e, root: string, language: string, method: string, params: unknown) =>
+  lsp.notify(root, language, method, params));
 
 // ---- browser panes --------------------------------------------------------
 /**
@@ -463,6 +474,19 @@ ipcMain.handle(CH.dbgConfigs, async (_e, cwd: string) => {
   }
 });
 ipcMain.handle(CH.dbgInterpreters, (_e, cwd: string) => findInterpreters(cwd));
+/*
+ * One choice, two consumers.
+ *
+ * The debugger needs an interpreter to run the code and the language server
+ * needs one to read it, and they must agree -- being debugged in one
+ * environment while go-to-definition reads another is its own kind of
+ * confusing. Servers already running are dropped so the next request starts
+ * one that knows about the environment just chosen.
+ */
+ipcMain.handle(CH.dbgChooseInterpreter, (_e, cwd: string, interpreter: string | null) => {
+  chooseInterpreter(cwd, interpreter);
+  lsp.stopAll();
+});
 ipcMain.handle(CH.dbgStart, (_e, opts: Parameters<typeof debugSession.start>[0]) =>
   debugSession.start(opts),
 );

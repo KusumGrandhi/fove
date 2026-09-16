@@ -115,6 +115,31 @@ for bin in "${MISSING_REQUIRED[@]:-}"; do
   [[ "$bin" == "claude" ]] && warn "Install Claude Code: https://claude.com/claude-code"
 done
 
+# A language server with no interpreter resolves stdlib and the project's own
+# code, and nothing else -- so `from flask import make_response` goes nowhere
+# while a local variable on the same line works. Every tool reads as installed
+# while half the feature is dead, which is worth naming at install time rather
+# than leaving someone to discover it one Cmd-click at a time.
+if command -v pyright-langserver >/dev/null 2>&1; then
+  bold "Python environments"
+  FOUND_ENV=0
+  for d in .venv venv .flask_env env; do
+    [[ -x "$d/bin/python" ]] && { ok "project venv — $d"; FOUND_ENV=1; break; }
+  done
+  if [[ $FOUND_ENV -eq 0 ]] && [[ -r "$HOME/.conda/environments.txt" ]]; then
+    while IFS= read -r root; do
+      [[ -n "$root" && -x "$root/bin/python" ]] || continue
+      case "$root" in */envs/*) ok "conda — ${root##*/}" ; FOUND_ENV=1 ;; esac
+    done < "$HOME/.conda/environments.txt"
+  fi
+  if [[ $FOUND_ENV -eq 0 ]]; then
+    warn "No project venv or conda environment found — Python go-to-definition"
+    warn "  will resolve stdlib and your own code, but not installed packages."
+  else
+    warn "fove picks one per project and remembers it; change it in a Debugger pane."
+  fi
+fi
+
 if [[ $CHECK_ONLY -eq 1 ]]; then
   bold "Check only; nothing was changed."
   exit 0
