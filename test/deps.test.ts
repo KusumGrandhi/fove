@@ -141,3 +141,67 @@ describe("what the setup sheet renders", () => {
     expect(r.filter((x) => !x.found)).toHaveLength(2);
   });
 });
+
+describe("language servers are a dependency like any other", () => {
+  test("the preferred server for each language is one the doctor knows about", async () => {
+    // Python go-to-definition was dead on a machine that HAD pyright, and
+    // nothing said so: the setup sheet never mentioned it, so there was no
+    // place for the absence -- or the presence -- to show up.
+    const { SERVERS } = await import("../src/main/lsp.js");
+    for (const [language, servers] of Object.entries(SERVERS)) {
+      const preferred = servers[0]!.bin;
+      const dep = DEPS.find((d) => d.bin === preferred);
+      expect(dep, `${language}: ${preferred} is spawned but is not in DEPS`).toBeTruthy();
+      expect(dep!.severity).toBe("feature");
+    }
+  });
+
+  test("every dep naming a language server is a binary the editor really spawns", async () => {
+    // The other direction: a dep the doctor offers to install, that nothing
+    // ever looks for, is a button that silently does nothing.
+    const { SERVERS } = await import("../src/main/lsp.js");
+    const spawned = new Set(Object.values(SERVERS).flat().map((s) => s.bin));
+    for (const d of DEPS) {
+      if (!d.bin.includes("langserver") && !d.bin.includes("language-server")) continue;
+      expect(spawned.has(d.bin), `${d.bin} is offered but never spawned`).toBe(true);
+    }
+  });
+
+  test("an alternative server satisfies the dep, so the sheet stays quiet", () => {
+    // A machine with jedi-language-server has working Python go-to-definition.
+    // Telling it to install pyright would be the doctor reporting a problem
+    // the user does not have.
+    const statuses = [
+      ...without("pyright-langserver"),
+      { bin: "jedi-language-server", path: "/opt/homebrew/bin/jedi-language-server" },
+    ];
+    const r = report(statuses);
+    const py = r.find((x) => x.dep.bin === "pyright-langserver")!;
+    expect(py.found).toBe(true);
+    // And the row shows what actually satisfied it, not a blank.
+    expect(py.status.path).toContain("jedi-language-server");
+    expect(summary(r)).toBeNull();
+  });
+
+  test("every alternative is a server the editor really tries", async () => {
+    const { SERVERS } = await import("../src/main/lsp.js");
+    const spawned = new Set(Object.values(SERVERS).flat().map((s) => s.bin));
+    for (const d of DEPS) {
+      for (const alt of d.alternatives ?? []) {
+        expect(spawned.has(alt), `${alt} is accepted but never spawned`).toBe(true);
+      }
+    }
+  });
+
+  test("a missing language server is not fatal", () => {
+    // Most machines have no pyright and should not be told off about it.
+    const r = report(without("pyright-langserver"));
+    expect(isUsable(r)).toBe(true);
+    expect(summary(r)).toContain("Pyright");
+  });
+
+  test("the sheet can offer to install it", () => {
+    const dep = DEPS.find((d) => d.bin === "pyright-langserver")!;
+    expect(installCommand(dep)).toBe("brew install pyright");
+  });
+});

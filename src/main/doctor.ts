@@ -10,7 +10,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { DEPS, type Dep, type DepStatus } from "../shared/deps.js";
+import { DEPS, type DepStatus } from "../shared/deps.js";
 import { spawnEnv } from "./loginPath.js";
 
 const run = promisify(execFile);
@@ -26,23 +26,27 @@ const run = promisify(execFile);
  * is still present, so a failure here narrows the report rather than voiding
  * it.
  */
-async function locate(dep: Dep, env: NodeJS.ProcessEnv): Promise<DepStatus> {
+async function locate(
+  bin: string,
+  versionArg: string | undefined,
+  env: NodeJS.ProcessEnv,
+): Promise<DepStatus> {
   const shell = process.env.SHELL || "/bin/zsh";
   let path: string | undefined;
   try {
-    const { stdout } = await run(shell, ["-l", "-c", `command -v ${dep.bin}`], {
+    const { stdout } = await run(shell, ["-l", "-c", `command -v ${bin}`], {
       env, windowsHide: true, timeout: 5000,
     });
     path = stdout.trim().split("\n")[0] || undefined;
   } catch {
-    return { bin: dep.bin };
+    return { bin };
   }
-  if (!path) return { bin: dep.bin };
+  if (!path) return { bin };
 
   let version: string | undefined;
-  if (dep.versionArg) {
+  if (versionArg) {
     try {
-      const { stdout } = await run(path, [dep.versionArg], {
+      const { stdout } = await run(path, [versionArg], {
         env, windowsHide: true, timeout: 5000,
       });
       version = stdout.trim().split("\n")[0] || undefined;
@@ -50,13 +54,24 @@ async function locate(dep: Dep, env: NodeJS.ProcessEnv): Promise<DepStatus> {
       // Present but uncommunicative. Still present.
     }
   }
-  return { bin: dep.bin, path, version };
+  return { bin, path, version };
 }
 
-/** Look for every dependency, concurrently. */
+/**
+ * Look for every dependency, concurrently.
+ *
+ * Alternatives are looked for too, because a dep they satisfy is not missing.
+ * They are asked for no version: a dep met by an alternative already reports
+ * that alternative's path, which is the part worth seeing, and the version
+ * flags of four Python language servers are not all the same.
+ */
 export async function check(): Promise<DepStatus[]> {
   const env = await spawnEnv();
-  return Promise.all(DEPS.map((d) => locate(d, env)));
+  const probes = DEPS.flatMap((d) => [
+    { bin: d.bin, versionArg: d.versionArg },
+    ...(d.alternatives ?? []).map((bin) => ({ bin, versionArg: undefined })),
+  ]);
+  return Promise.all(probes.map((p) => locate(p.bin, p.versionArg, env)));
 }
 
 export interface InstallResult {

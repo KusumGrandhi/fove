@@ -35,6 +35,15 @@ export interface Dep {
   url?: string;
   /** Argument that makes it print a version, for the check. */
   versionArg?: string;
+  /**
+   * Other binaries that do the same job. Any one of them satisfies this dep.
+   *
+   * `bin` stays the one the sheet offers to install -- the recommendation --
+   * while these are merely accepted. A machine with jedi-language-server has
+   * working Python go-to-definition, and a doctor that told it to install
+   * pyright anyway would be reporting a problem the user does not have.
+   */
+  alternatives?: string[];
 }
 
 /**
@@ -78,6 +87,29 @@ export const DEPS: Dep[] = [
     versionArg: "--version",
   },
   {
+    /*
+     * The binary the editor actually spawns, not the `pyright` CLI beside it.
+     * They ship together, but naming the checker here would let the doctor
+     * report a tick while the editor still found nothing to talk to.
+     *
+     * No versionArg on purpose: `pyright-langserver --version` exits non-zero,
+     * because it wants a transport flag instead. The doctor would survive that
+     * -- it locates with `command -v` and treats a refused version as
+     * uncommunicative-but-present -- but there is no point spending an exec
+     * and up to five seconds of timeout to learn nothing.
+     */
+    bin: "pyright-langserver",
+    label: "Pyright",
+    severity: "feature",
+    needs:
+      "go-to-definition, find-references, rename and hover in Python. Without it .py files keep highlighting, ruff diagnostics and the outline.",
+    brew: "pyright",
+    url: "https://microsoft.github.io/pyright/#/installation",
+    // The rest of the table in main/lsp.ts, which the editor tries in this
+    // order. Held to that list by test/deps.test.ts.
+    alternatives: ["basedpyright-langserver", "jedi-language-server", "pylsp"],
+  },
+  {
     bin: "code",
     label: "VS Code CLI",
     severity: "optional",
@@ -102,12 +134,23 @@ export interface DepReport {
   found: boolean;
 }
 
-/** Join the spec to what was found on disk. */
+/**
+ * Join the spec to what was found on disk.
+ *
+ * The status carried back is whichever binary actually satisfied the dep, so
+ * a row for a dep met by an alternative shows that alternative's path and
+ * version rather than a blank where the recommended one would have been.
+ */
 export function report(statuses: DepStatus[]): DepReport[] {
   const byBin = new Map(statuses.map((s) => [s.bin, s]));
   return DEPS.map((dep) => {
-    const status = byBin.get(dep.bin) ?? { bin: dep.bin };
-    return { dep, status, found: !!status.path };
+    const own = byBin.get(dep.bin) ?? { bin: dep.bin };
+    if (own.path) return { dep, status: own, found: true };
+    for (const alt of dep.alternatives ?? []) {
+      const status = byBin.get(alt);
+      if (status?.path) return { dep, status, found: true };
+    }
+    return { dep, status: own, found: false };
   });
 }
 

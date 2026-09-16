@@ -18,7 +18,7 @@ import { BrowserPane } from "./panes/Browser.js";
 import { DebuggerPane } from "./panes/Debugger.js";
 import { DiffView, type DiffRequest } from "./panes/DiffView.js";
 import { ModelPicker, type Provider } from "./ui/ModelPicker.js";
-import { AgentsWidget, TokensWidget, useSnapshot } from "./ui/widgets.js";
+import { SessionCard } from "./ui/widgets.js";
 import { TeammateBar, TeammateView, useTeammates } from "./ui/Teammates.js";
 import { C, Divider, LayoutMenu, ToolButton, ToolMenu } from "./ui/Chrome.js";
 import { Palette, type PaletteItem } from "./ui/Palette.js";
@@ -108,6 +108,41 @@ interface Persisted {
 const SINGLETON_PANES = new Set<PaneKind>([
   "git", "debug", "search", "config", "browser", "agents", "editor",
 ]);
+
+/**
+ * What to call each claude pane.
+ *
+ * Numbered only when a name would otherwise be ambiguous: one claude pane is
+ * "claude", two are "claude 1" and "claude 2". Panes on a named provider keep
+ * that name and are numbered within it, so an Anthropic pane and an OpenRouter
+ * pane are told apart by their provider rather than by a count.
+ *
+ * Computed in one place because two places show it -- the pane header and the
+ * stats card -- and a card labelled "claude 2" beside a header labelled
+ * "claude" is worse than no label at all. Keyed by pane id so both callers
+ * read the same answer rather than each deriving one.
+ */
+function claudePaneLabels(
+  panes: Record<string, PaneSpec>,
+  defaultLabel?: string,
+): Map<string, string> {
+  const claude = Object.values(panes).filter((p) => p.kind === "claude");
+  const nameOf = (p: PaneSpec) =>
+    (p.providerEnv ? p.providerLabel : defaultLabel) ?? "claude";
+
+  const totals = new Map<string, number>();
+  for (const p of claude) totals.set(nameOf(p), (totals.get(nameOf(p)) ?? 0) + 1);
+
+  const seen = new Map<string, number>();
+  const out = new Map<string, string>();
+  for (const p of claude) {
+    const name = nameOf(p);
+    const n = (seen.get(name) ?? 0) + 1;
+    seen.set(name, n);
+    out.set(p.id, (totals.get(name) ?? 1) > 1 ? `${name} ${n}` : name);
+  }
+  return out;
+}
 
 const makePane = (kind: PaneKind, cwd?: string): PaneSpec => ({
   id: newId("p"),
@@ -486,15 +521,14 @@ export function App() {
     localStorage.setItem("fove.stats", statsOpen ? "open" : "closed");
   }, [statsOpen]);
 
-  // The rail watches whatever directory the active tab is pointed at. The hook
-  // runs unconditionally -- before the `!active` early return -- because hooks
-  // cannot be called conditionally.
-  // The rail follows the active workspace.
-  const railCwd = active?.cwd || appCwd;
   /**
-   * The rail follows the focused claude pane, falling back to any claude pane
-   * in the tab. Without this it showed whichever transcript in the folder was
-   * touched last -- often an editor's session, not one running in fove.
+   * The claude pane the single-session views follow: the focused one, falling
+   * back to any claude pane in the tab.
+   *
+   * The stats rail no longer uses this -- it draws a card per pane -- but Keel
+   * and the Agents pane each show one session at a time and need to be told
+   * which. Without it they read whichever transcript in the folder was touched
+   * last, often an editor's session rather than one running in fove.
    */
   const railPaneId = (() => {
     if (!active) return undefined;
@@ -502,13 +536,6 @@ export function App() {
     if (focused?.kind === "claude") return focused.id;
     return Object.values(active.panes).find((p) => p.kind === "claude")?.id;
   })();
-  // With no claude pane in the tab there is nothing to report. Falling back to
-  // the folder's newest transcript is what made the rail show 569.7k for a
-  // session running in someone else's editor.
-  const hasClaudePane = railPaneId !== undefined;
-  // Collapsed means nothing renders the snapshot, so polling for it every
-  // 2.5s would be pure waste. An empty cwd is the hook's idle signal.
-  const snap = useSnapshot(hasClaudePane && statsOpen ? railCwd : "", 2500, railPaneId);
 
   /**
    * Diffs Claude is blocked on, oldest first. A turn can produce several, and
@@ -619,6 +646,16 @@ export function App() {
   }, []);
 
   useEffect(() => { void readDefault(); }, [readDefault]);
+
+  /**
+   * Pane id -> display name, shared by the pane headers and the stats cards.
+   *
+   * Declared here rather than beside the other pane derivations because it
+   * needs `defaultBackend`, which names an unconfigured pane's provider.
+   */
+  const paneLabels = active
+    ? claudePaneLabels(active.panes, defaultBackend?.label)
+    : new Map<string, string>();
 
   const answerDiff = useCallback((id: string, verdict: "saved" | "rejected") => {
     window.th.ideDiffResult(id, verdict);
@@ -1347,9 +1384,8 @@ export function App() {
                     <span style={{ ...S.gripDots, opacity: isPin ? 0.25 : 1 }}>⠿</span>
                     <span style={{ color: focused ? C.fg : C.faint }}>
                       {spec.kind === "claude"
-                        ? ((spec.providerEnv ? spec.providerLabel : defaultBackend?.label)
-                            ? `✳ ${spec.providerEnv ? spec.providerLabel : defaultBackend?.label}`
-                            : "✳ claude")
+                        // Numbered to match the stats card for this pane.
+                        ? `✳ ${paneLabels.get(spec.id) ?? "claude"}`
                         : spec.kind === "git" ? "⎇ git"
                         : spec.kind === "editor" ? "◧ editor"
                         : spec.kind === "search" ? "⌕ search"
@@ -1495,8 +1531,39 @@ export function App() {
           </div>
           {statsOpen ? (
             <div style={S.railBody}>
-              <TokensWidget snap={snap} />
-              <AgentsWidget snap={snap} />
+              {(() => {
+                /*
+                 * One card per claude pane, not one per workspace.
+                 *
+                 * Each pane is a separate session with its own window and its
+                 * own bill, so a single card could only ever describe one of
+                 * them -- and nothing on screen said which. The label is the
+                 * pane's own header text so the card and the pane read the
+                 * same, with a number appended only when two panes would
+                 * otherwise be indistinguishable.
+                 *
+                 * Computed here rather than above because the cards poll for
+                 * themselves: a collapsed rail renders none of this, and so
+                 * costs nothing.
+                 */
+                const claude = Object.values(active.panes).filter((p) => p.kind === "claude");
+                if (claude.length === 0) {
+                  return <div style={S.railEmpty}>no claude pane in this workspace</div>;
+                }
+                return claude.map((p) => (
+                  <SessionCard
+                    key={p.id}
+                    paneId={p.id}
+                    cwd={p.cwd ?? active.cwd}
+                    // The same label the pane header shows, by construction.
+                    title={`✳ ${paneLabels.get(p.id) ?? "claude"}`}
+                    focused={p.id === active.focusedPaneId}
+                    onSelect={() =>
+                      updateTab(active.id, (t) => ({ ...t, focusedPaneId: p.id }))
+                    }
+                  />
+                ));
+              })()}
             </div>
           ) : (
             // Vertical label, so the spine still says what it opens.
@@ -1662,6 +1729,7 @@ const S: Record<string, React.CSSProperties> = {
     color: C.faint, cursor: "pointer", userSelect: "none",
   },
   railBody: { flex: 1, minHeight: 0, overflowY: "auto", padding: 10 },
+  railEmpty: { fontSize: 11, color: "#33333c", padding: "4px 2px" },
   railPlaceholder: {
     height: "100%", display: "flex", alignItems: "center", justifyContent: "center",
     color: "#33333c", fontSize: 11, border: `1px dashed ${C.line}`, borderRadius: 8,
